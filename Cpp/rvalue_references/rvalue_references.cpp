@@ -1,4 +1,10 @@
 // Reference : https://www.tutorialspoint.com/cplusplus/cpp_copy_constructor.htm#:~:text=The%20copy%20constructor%20is%20a,an%20argument%20to%20a%20function.
+/**
+ * This example shows how a move constructor based on Rvalue reference 
+ *  can be implemented. And how it only impacts the rvalue reference.
+ * Secondly, it reminds that assignment operators are different from 
+ * constructors.
+ */
 #include <iostream>
 
 using namespace std;
@@ -7,11 +13,13 @@ class Line {
 
    public:
       int getLength( void );
-      Line( int len );                  // simple constructor
-      Line( const Line &obj);           // copy constructor
-      Line( Line &&obj);           // move constructor
-      ~Line();                          // destructor
-      Line operator+(const Line &obj_b);// + operator
+      int* getLengthPointer( void );
+      Line( int len );                             // simple constructor
+      Line( const Line &obj);                      // copy constructor
+      Line( Line &&obj);                           // move constructor
+      ~Line();                                     // destructor
+      Line operator+(const Line &obj_b);           // + operator
+      Line& operator= ( const Line & ) = default;	// trying default copy assignment
 
    private:
       int* ref_len;
@@ -57,6 +65,10 @@ int Line::getLength( void ) {
    return *ref_len;
 }
 
+int* Line::getLengthPointer( void ){
+    return ref_len;
+}
+
 void display(Line obj) {
    cout << "Length of line : " << obj.getLength() <<endl;
 }
@@ -65,9 +77,13 @@ void display(Line obj) {
 int main(){
     Line line_1(10);
     Line line_2 = Line (20);
-    cout << "Trial 1" << endl;
+    cout << "========Trial diff 1==========" << endl;
     Line line_3 = line_1 + line_2;
     cout << "Trial 2" << endl;
     Line line_3_2 = line_3;
+    cout << "========Trial diff 3==========" << endl;
+    line_3_2 = line_2;
+    cout << "line_3_2 is located at: " << line_3_2.getLengthPointer() << " Value: " << line_3_2.getLength() << endl;
+    cout << "Eewww, dirtly shallow copy. I don't like JAVA style." << endl;
     return 0;
 }
