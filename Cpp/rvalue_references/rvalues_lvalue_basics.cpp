@@ -22,14 +22,14 @@ Line::Line(int len) {
    
    // allocate memory for the pointer;
    ref_len = new int;
-   cout << "Allocate space for " << len << endl;
+   cout << "Allocate space for " << len << " at:" << ref_len << endl;
    
    *ref_len = len;
 }
 
 Line::Line(const Line &obj) {
-   cout << "Copy constructor allocating ptr." << endl;
    ref_len = new int;
+   cout << "Copy constructor copying " << *obj.ref_len <<", src_ptr:" << obj.ref_len << " dest_ptr:" << ref_len << endl;
    
    cout << "Allocate space for Copying " << *(obj.ref_len) << endl;
    *ref_len = *(obj.ref_len); // copy the value
@@ -42,7 +42,7 @@ Line Line::operator+(const Line &obj_b){
 }
 
 Line::~Line(void) {
-   cout << "Freeing memory!" << endl;
+   cout << "Freeing memory: " << ref_len << "!" << endl;
    delete ref_len;
 }
 
