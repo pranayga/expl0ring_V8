@@ -56,7 +56,9 @@ In few words, below are the things I don't quite understand:
 * Line 4: `static_assert`, well that's something I've never seen before. I won't what that does.
 * Line 12: `constexpr TaggedImpl() : ptr_{} {}`, what's this weird constructor which is initialized with curly braces? What is this `_ptr` thing?
 * Line 23: `static_cast<>`, what's this weird cast?
+
 Me by this point,
+
 ![](https://media1.tenor.com/images/634d6dae7a9d4eb56a108469a05f831d/tenor.gif?itemid=8139976)
 
 I guess we need to go do some brushup on our C++ Skills. Upon more re-search, most of it turned out to be pretty simple C++11 stuff. We'll be discussing a little more things than what's required to answer the questions above.
@@ -187,7 +189,9 @@ And it finally Makes sense!
 
 Looking back, now you'd be like Hmmm...
 
-That was so obvious and easy. I agree! Initially nothing made sense but after reading a few articles things fit in!
+That was so obvious and easy. I agree! We didn't need to read 90% of the links in order to make sense of our initial function. However these articles gives us a wholistic understanding of the features and places to refer back to! 
+
+Initially nothing made sense but after reading a few articles things fit in!
 
 ## Where to next?
 
