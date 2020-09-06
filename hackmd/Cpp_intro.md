@@ -201,7 +201,7 @@ Once you're good with the basics of `C++11/14`, I would recommend the following 
 * (TODO, out of scope)[Smart Pointers guide](https://www.chromium.org/developers/smart-pointer-guidelines)
 * (TODO, out of scope)[Important Abstractions](https://www.chromium.org/developers/coding-style/important-abstractions-and-data-structures) 
 
-## More References (In no perticular Order)
+## More References (In no particular Order)
 
 * [Pointers VS References](https://www3.ntu.edu.sg/home/ehchua/programming/cpp/cp4_PointerReference.html) -> Use this as a refresher for how references differ from pointers, what's legal and what's not. Also, mentions how const functions can accept non-const variables, but not the other way around.
 * Rvalues & Lvalues
