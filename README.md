@@ -18,6 +18,18 @@ If you are completely new to V8, see this quick except from the README:
 > V8 can run standalone, or can be embedded into any C++ application.
 > V8 Project page: https://v8.dev/docs
 
+## Weekly Posts
+
+We aim to release one-two blogs posts each week covering content that we learnt
+during that week. The idea is to document the flow of learning and link the gems
+from the maze of documentation that exists on the internet.
+
+* **C++ Tips for V8**
+    * [C++11/14 for a C++98 with V8 in mind](/docs/cpp_intro.md)
+* **V8 Structure**
+    * [High-Level Architecture](/docs/high_level_architecture.md)
+
+
 ## Previous Work
 
 Our goal in this study will be to create as complete a guide as possible to understanding the current state of V8 exploitation, and also its future! However, it would be entirely impossible without the work that has already been accomplished that gave us our own starting point. Here are several references that we used for understanding. There are probably more that we could have listed, but these were the most influential. Many of the topics covered in these articles will be covered in future posts, so there's no need to fully understand everything on this list. However, this will be a great place to come back to if future posts don't provide enough information. There's a list similar to this one on the [zon8 blog](https://zon8.re/posts/v8-chrome-architecture-reading-list-for-vulnerability-researchers/) where you can find even more links.
