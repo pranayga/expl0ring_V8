@@ -32,8 +32,8 @@ Wait @pranayga, you didn't explain what __isolates__, __contexts__, __handles__ 
 
 ### Starting V8 Process
 
+#### Startup Noise
 Now, Let's take a look at the first few lines of the example.
-
 ```C++
 int main(int argc, char* argv[]) {
   // Initialize V8.
@@ -45,6 +45,64 @@ int main(int argc, char* argv[]) {
   ....
  }
 ```
+##### InitializeICUDefaultLocation
+We start with a call to `InitializeICUDefaultLocation` function. We see that it's in the v8::v8 scope. While we can find the function definition in the [/init/icu_util.h](), it doesn't tell us a whole lot about what it is. Few google searches after, it looks like [ICU](http://site.icu-project.org/) is a C++ library which is imported into V8 under [v8/third_party/icu](https://chromium.googlesource.com/v8/v8/+/69abb960c97606df99408e6869d66e014aa0fb51/DEPS#16). 
+
+It is responsible for language localisation and textual support, timing and stuff. Yeah, not really interested.
+
+##### InitializeExternalStartupData
+
+This function is defined in `init/startup-data-util.h`. It seems to have to do with restoring contextual states for standalone executables like `d8`. I also seems to be looking for specific files like `snapshot_blob.bin`. Oh well, moving on.
+
+##### platform
+The `NewDefaultPlatform` is an interesting one. in V8's terminology, a platform defines interesting properties like 
+* number of threads V8 process will be using
+* tracing configuration
+* stackdumping behaviour
+* .... and other stuff
+
+Once you have the platform initialized, it's like you have a v8 instance up. Now, you start with the actual things which start to connect with the actual JS processing and related stuff.
+
+You then use this pointer to initialize the V8 engine.
+
+#### Creating an Isolate & Context
+
+Okay, now that we have our V8 running, let's get some terminologies which are essential going. Take a look at the code below:
+```C++
+ // Create a new Isolate and make it the current one.
+  v8::Isolate::CreateParams create_params;
+  create_params.array_buffer_allocator =
+      v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+  v8::Isolate* isolate = v8::Isolate::New(create_params);
+  {
+    v8::Isolate::Scope isolate_scope(isolate);
+
+    // Create a stack-allocated handle scope.
+    v8::HandleScope handle_scope(isolate);
+
+    // Create a new context.
+    v8::Local<v8::Context> context = v8::Context::New(isolate);
+
+    // Enter the context for compiling and running the hello world script.
+    v8::Context::Scope context_scope(context);
+    {// Another un-named namespace}
+ }
+```
+##### Step 1: CreateParams
+
+We start off by creating a [create_params](https://source.chromium.org/chromium/chromium/src/+/master:v8/include/v8.h;drc=b79862be255715191be99c3ee924acdea58526fd;bpv=1;bpt=1;l=8215). This is a stucture with corresponds to a V8 Isolate, and acts like a configuration variable for the Isolate.
+Wait, what's isolate?
+
+Think of __isolate__ as an independent flow of execution, containing copies of all the componenets required to execute JS code in it's entirety. Quoting the documentation:
+> Isolate represents an isolated instance of the V8 engine.  V8 isolates have completely separate states.  Objects from one isolate must not be used in other isolates.  The embedder can create multiple isolates and use them in parallel in multiple threads.  An isolate can be entered by at most one thread at any given time.
+
+Next, for our isolate we get a `NewDefaultAllocator`, which is a datamember of `CreateParams` structure and controls the heap allocator for the instance. We wouldn't want two seperate instances to share the alloactor.
+
+Once we have these basic components, we initialize the __isolate__ with help of our `create_param` structure. At this point we have a complete set of V8's instance (an Isolate), which we can use.
+
+##### Step 2: Scopes & Destructors (A love story)
+
+If you're new to V8 and not that accustomed to C++, the curly braces right after __Isolate__'s initialization might look werid to you. These are un-named namespaces
 
 ## Open Leads:
 
