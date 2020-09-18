@@ -2,7 +2,7 @@
 
 ###### Quick Disclaimer: We do not have definitive knowledge/are not experts of all things V8. Sometimes we will make assumptions about the code, attempting to rely on the existing V8 documentation or articles by members of their team. Also, this knowledge should be used to enhance the security of V8. Please report any vulnerabilities through Google's responsible disclosure program.
 
-Welcome to the inaugural post for this series on vulnerability research for Google's V8! We ([Pranay Garg](hashprks.com) and [John Johnson](https://m4dst4cks.github.io)) are excited to take a deep dive into everything that you need to get started in this space. We'll each be publishing half of the posts, so make sure to check out both of our blogs!
+Welcome to the inaugural post for this series on vulnerability research for Google's V8! We ([Pranay Garg](https://hashprks.com) and [John Johnson](https://m4dst4cks.github.io)) are excited to take a deep dive into everything that you need to get started in this space. We'll each be publishing half of the posts, so make sure to check out both of our blogs!
 
 ## Motivation
 
@@ -17,19 +17,6 @@ If you are completely new to V8, see this quick except from the README:
 > V8 is written in C++ and is used in Google Chrome, the open source browser from Google.
 > V8 can run standalone, or can be embedded into any C++ application.
 > V8 Project page: https://v8.dev/docs
-
-## Weekly Posts
-
-We aim to release one-two blogs posts each week covering content that we learnt
-during that week. The idea is to document the flow of learning and link the gems
-from the maze of documentation that exists on the internet.
-
-* **C++ Tips for V8**
-    * [C++11/14 for a C++98 with V8 in mind](/docs/cpp_intro.md)
-* **V8 Structure**
-    * [High-Level Architecture](/docs/high_level_architecture.md)
-    * [Exploring the V8 engine - I](/docs/v8_exploration_I.md)
-
 
 ## Previous Work
 
@@ -55,9 +42,10 @@ http://eternalsakura13.com/2018/05/06/v8/
 [Turbofan Design](https://docs.google.com/presentation/d/1sOEF4MlF7LeO7uq-uThJSulJlTh--wgLeaVibsbb3tc/edit#slide=id.g5499b9c42_01170)
 [JavaScript Engine Internals by Mathias Bynens](https://www.youtube.com/watch?v=-lt6a9kbc_k)
 [JavaScript Engine Fundamentals by Mathias Bynens](https://mathiasbynens.be/notes/shapes-ics)
-http://eternalsakura13.com/2018/06/16/nodefest_v8/
-https://jayconrod.com/posts/52/a-tour-of-v8-object-representation
-https://medium.com/dailyjs/understanding-v8s-bytecode-317d46c94775
+[Source to Binary Jounrney of V8 javascript engine by Sakura](http://eternalsakura13.com/2018/06/16/nodefest_v8/)
+[A tour of V8: object representation by Jay Conrod](https://jayconrod.com/posts/52/a-tour-of-v8-object-representation)
+[Understanding V8’s Bytecode by Franziska Hinkelmann](https://medium.com/dailyjs/understanding-v8s-bytecode-317d46c94775)
+[NodeJS V8 docs](https://v8docs.nodesource.com/)
 
 #### Exploring Code
 
@@ -66,20 +54,20 @@ https://medium.com/dailyjs/understanding-v8s-bytecode-317d46c94775
 
 #### Memory structure
 
-https://deepu.tech/memory-management-in-v8/
-https://www.fullstackacademy.com/tech-talks/memory-management-js-vs-c-and-understanding-v8
+[Visualizing memory management in V8 Engine by Deepu K Sasidharan](https://deepu.tech/memory-management-in-v8/)
+[Memory management, JS vs. C++ and understanding V8 by Jasmine Zangi](https://www.fullstackacademy.com/tech-talks/memory-management-js-vs-c-and-understanding-v8)
 
 #### Writing V8 C++ plugins
 
-https://www.freecodecamp.org/news/understanding-the-core-of-nodejs-the-powerful-chrome-v8-engine-79e7eb8af964/
-https://explorerplusplus.com/blog/2019/03/07/embedding-v8-c++-application
-https://dustinoprea.com/2018/09/26/c-embedding-the-v8-javascript-engine/
-https://nicedoc.io/pmed/v8pp
+[Understanding How the Chrome V8 Engine Translates JavaScript into Machine Code by Mayank Tripathi](https://www.freecodecamp.org/news/understanding-the-core-of-nodejs-the-powerful-chrome-v8-engine-79e7eb8af964/)
+[Embedding V8 in a C++ application by David Erceg](https://explorerplusplus.com/blog/2019/03/07/embedding-v8-c++-application)
+[C++: Embedding the V8 JavaScript Engine by Dustin Oprea]https://dustinoprea.com/2018/09/26/c-embedding-the-v8-javascript-engine/)
+[v8pp](https://nicedoc.io/pmed/v8pp)
 
 #### Exploitation 
 
-https://github.com/vngkv123/aSiagaming/blob/master/Chrome-v8-tutorials/README.md
-http://eternalsakura13.com/2018/08/02/v8_debug/
+[Chrome V8 tutorials by vngkv123](https://github.com/vngkv123/aSiagaming/blob/master/Chrome-v8-tutorials/README.md)
+[V8 debug writeup by Sakura](http://eternalsakura13.com/2018/08/02/v8_debug/)
 
 #### Specific Bugs
 
