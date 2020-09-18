@@ -28,6 +28,7 @@ from the maze of documentation that exists on the internet.
     * [C++11/14 for a C++98 with V8 in mind](/docs/cpp_intro.md)
 * **V8 Structure**
     * [High-Level Architecture](/docs/high_level_architecture.md)
+    * [Exploring the V8 engine - I](/docs/v8_exploration_I.md)
 
 
 ## Previous Work
