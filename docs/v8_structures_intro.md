@@ -11,6 +11,8 @@ V8 provides you with some sample files inside [/sample](https://source.chromium.
 * commit hash: `7e8e76e784061277e13112c67c21c3f9438da257`
 * [hello-world.cc](https://source.chromium.org/chromium/chromium/src/+/master:v8/samples/hello-world.cc;l=1;drc=7e8e76e784061277e13112c67c21c3f9438da257) - commit specific link
 
+![Let's get started](https://media1.tenor.com/images/7dcc0b5a2c64d741b6edd12a88738cf9/tenor.gif?itemid=4767352 "let'sgetstarted")
+
 ## Hello-Exlorer.cc
 
 The [hello-world.cc](https://source.chromium.org/chromium/chromium/src/+/master:v8/samples/hello-world.cc) file is a simple example for embedding V8 in C++. The example involves simple executing a simple JS command: `"'Hello' + ', World!'"`
@@ -102,9 +104,44 @@ Once we have these basic components, we initialize the __isolate__ with help of 
 
 ##### Step 2: Scopes & Destructors (A love story)
 
-If you're new to V8 and not that accustomed to C++, the curly braces right after __Isolate__'s initialization might look werid to you. These are un-named namespaces
+If you're new to V8 and not that accustomed to C++, the curly braces right after __Isolate__'s initialization might look werid to you. These are [C++'s scopes](https://en.cppreference.com/w/cpp/language/scope). Basically, it tells the compiler that we're done with all the objects created inside the scope and to get rid of them once they go out of scope (ie: call destructors). This allows us to execute our example without having to manually free things.
 
-## Open Leads:
+##### Step 3: Setting __isolate_scope__ & creating __handle_scope__
+
+Next, we configure our V8's scope to the new _isolate_ we just created, this tells our stack-alloacted classes which _isolate_ they belong to.
+
+:cyclone:
+___handle_scope___ which is an instance of class __HandleScope__ is something which is especially interesting. Looking at the [source](https://source.chromium.org/chromium/chromium/src/+/master:v8/include/v8.h;drc=6d68750fbce8f7a7b8046de6a8f4a75e5648bb38;bpv=1;bpt=1;l=1201) for this file, I has wrappers for functions like `new[]`, `Delete[]`, however they're private. So it looks like a wrapper. At a closer inspection we a friend class [__Local__](https://source.chromium.org/chromium/chromium/src/+/master:v8/include/v8.h;l=194;drc=6d68750fbce8f7a7b8046de6a8f4a75e5648bb38;bpv=1;bpt=1).
+
+###### :mega: __Local__ Class
+
+This class looks pretty important, so let's stop for a second and take a deeper look. Reading the description on top of the class definition in `/include/v8.h`. 
+While it might not make a ton of sense for now, this is the first point where we see the garbage collection being mentioned. We'll come back to this class once we start looking more into the way V8 manages the data structs.
+
+![Garbage Collector!](https://media1.tenor.com/images/560c23f7270834759f756243088f58cf/tenor.gif?itemid=12508431)
+
+Okay, let's get back to our example
+
+##### Step 4: Creating a V8 __context__ & exec :ship: 
+
+Okay next few steps are simple, we create a JS context inside out __isolate__ and just call the functions required to create out JS command and send it off for execution. Done.
+
+![Now wait a minute](https://media1.tenor.com/images/4805b3613bd6e7f744e52bab4e98a5a0/tenor.gif?itemid=148506155 "explain that")
+
+Wait, @pranayga. What is __context__ inside the __isolate__? Sorry, yeah right. About that.
+
+We have created a V8 __isolate__, which is an independent set of all the components required to execute JS code. Now imagine you are executing JS files. You would want each file to execute individually, that is with it's own global context. The V8's [embeding doc](https://v8.dev/docs/embed#contexts) explains it quite succintly:
+> In V8, a context is an execution environment that allows separate, unrelated, JavaScript applications to run in a single instance of V8. You must explicitly specify the context in which you want any JavaScript code to be run.
+
+:cyclone: I higly recommend reading two things now:
+- Header file where [Context](https://source.chromium.org/chromium/chromium/src/+/master:v8/include/v8.h;drc=6d68750fbce8f7a7b8046de6a8f4a75e5648bb38;bpv=1;bpt=1;l=10291) is defined.
+- Offical guide to [embedding V8](https://v8.dev/docs/embed)
+
+
+#### UP Next
+In the next post, we'll be looking into the interal control flow starting the point where the JS code is passed into the V8's context to be executed.
+
+## Intersting Links:
 
 * [Embedding built-ins](https://v8.dev/docs/embed)
 * CodeFlow
