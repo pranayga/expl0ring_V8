@@ -106,8 +106,7 @@ Our goal in this study will be to create as complete a guide as possible to unde
 
 [The hunt for Chromium issue 1072171 by Javier Jimenez](https://sensepost.com/blog/2020/the-hunt-for-chromium-issue-1072171/)
 
-[Chrome V8 - -CVE-2019-5782 Tianfu Cup Qihoo 360 S0rrymybad by 
-aSiagaming](https://github.com/vngkv123/aSiagaming/blob/master/Chrome-v8-906043/Chrome%20V8%20-%20-CVE-2019-5782%20Tianfu%20Cup%20Qihoo%20360%20S0rrymybad-%20-ENG-.pdf)
+[Chrome V8 - -CVE-2019-5782 Tianfu Cup Qihoo 360 S0rrymybad by aSiagaming](https://github.com/vngkv123/aSiagaming/blob/master/Chrome-v8-906043/Chrome%20V8%20-%20-CVE-2019-5782%20Tianfu%20Cup%20Qihoo%20360%20S0rrymybad-%20-ENG-.pdf)
 
 [SIMPLE BUGS WITH COMPLEX EXPLOITS by Syed Faraz Abrar](https://www.elttam.com/blog/simple-bugs-with-complex-exploits/)
 
