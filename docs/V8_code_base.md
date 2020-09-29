@@ -38,7 +38,7 @@ Now let's check out some of the important folders under `v8/src/`.
 
 ### `d8`
 
-Compiling locally outputs a binary called [d8](https://v8.dev/docs/d8). It is a very lightweight wrapper for V8, and it saves you the trouble of making your own. If you are interested in that, I'd recommend checking out the [other half of this series](https://hashprks.com/blog).
+Compiling locally outputs a binary called [d8](https://v8.dev/docs/d8). It is a very lightweight wrapper for V8, and it saves you the trouble of making your own. If you are interested in that, I'd recommend checking out the [other half of this series](https://hashprks.com/exploring-the-v-8-engine-1).
 
 As I mentioned in the my last post, V8 is usually embedded within another application, so we need to launch an [isolate](https://v8docs.nodesource.com/node-4.8/d5/dda/classv8_1_1_isolate.html) to run our JavaScript. d8 does this in `d8/d8.cc` through V8's API calls, and a bunch of other setup for the REPL. Looking at all of the code in the folder a bit more, you will see references to [Fuzzilli](https://github.com/googleprojectzero/fuzzilli) as d8 includes many features to support this framework, as well as other testing tools employed by Google. It's important to understand this binary if you're thinking about adding support for more test systems or extending the shell in some way.
 
@@ -78,7 +78,7 @@ When the embedder wants to run some JavaScript, it makes a call to the `Compile`
 
 ### `execution`
 
-Personally, I thing `execution.cc` would have been a good name for the garbage collector (dumb joke, sorry). However, it is actually the code responsible for running scripts. The embedder makes a separate call to run the code that was created from compiling the JavaScript. This means creating the memory regions to map executable and code and execute it. If you're looking to trace execution through this step, look into `execution/compiler.cc`.
+Personally, I thing `execution.cc` would have been a good name for the garbage collector (dumb joke, sorry). However, it is actually the code responsible for running scripts. The embedder makes a separate call to run the code that was created from compiling the JavaScript. This means creating the memory regions to map executable and code and execute it. If you're looking to trace execution through this step, look into `compiler.cc`.
 
 ### `interpreter`
 
@@ -120,4 +120,4 @@ As I mentioned earlier, it would be impossible and unnecessary to fully go throu
 
 ## References
 
-https://v8.dev/docs/embed#advanced-guide
+[V8 embedding docs](https://v8.dev/docs/embed#advanced-guide)
