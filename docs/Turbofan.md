@@ -98,7 +98,7 @@ The `types.h` file is incredibly useful for understanding how V8 accomplishes ty
 
 ### Arrays
 
-If you looked at `types.h` you might have noticed that there are different types of arrays. That is because we want to store array values efficiently, and there are different optimizations for different kinds of arrays. For example, take a look at this code:
+One thing that is not immediately obvious from looking at `types.h` is that there are actually different types of arrays. That is because we want to store array values efficiently, and there are different optimizations for different kinds of arrays. For example, take a look at this code:
 
 ```
 let arr1 = [0, 1, 2];
