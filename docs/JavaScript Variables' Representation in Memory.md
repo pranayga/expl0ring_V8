@@ -292,6 +292,8 @@ The calls to `%DebugPrint(obj)` will output the addresses we need, and you can g
 +--------------------+
 -   length of array  -
 +--------------------+    <- begin second allocation (a's backing store)
+-       map ptr      -
++--------------------+
 -   length of store  -
 +--------------------+
 -        a[0]        -
@@ -307,11 +309,21 @@ Notice how the arrays are laid out sequentially, with the elements stored in-bet
 
 ##### Side note: Jeremy Fetiveau made a [tool](https://github.com/JeremyFetiveau/debugging-tools) that helps with this, although you may need to make updates for newer versions of V8. You can also use lldb, and there are some helpful files for that in the V8 source code. A few different approaches have been described in depth [here](https://joyeecheung.github.io/blog/2018/12/31/tips-and-tricks-node-core/).
 
+But it actually turns out that how you write your code will affect the order of allocations. For example, if we change our array declarations to 
+
+```
+  let a = [1.1, 1.2];
+  let b = [2.1, 2.2];
+  let c = [1, 2, 3];
+```
+
+then the backing stores will be allocated in front of their respective arrays.
+
 ## Where is the Code?
 
 It's nice to be able to see the memory layout and theorize how allocations are being made. However, I wanted to find where the code actually allocates these structures. We are looking for the "New" keyword since V8 uses automatic memory management. The `src/objects` folder has several `js-[].cc` files which seem to be relevant, and contain references to regexps, proxies, etc.; which I know are different types of [Objects](https://www.w3schools.com/js/js_object_definition.asp). This led me to `js-objects.h` which had a definition for `class JSObject`. In `js-objects.cc` there is a definition `MaybeHandle<JSObject> JSObject::New(Handle<JSFunction> constructor, Handle<JSReceiver> new_target, Handle<AllocationSite> site)` which seems to be where the actual allocation happens. Unfortunately, most of the actual creation seems like magic to me, but this is where I believe we would look. However, my partner in this series mentioned that this process is also influenced by Torque, which  makes sense considering how many array operations it performs. His posts may be able to shed a little more light on this topic.
                                     
-Taking a deeper dive into the code would be useful for understanding how different scenarios affect the heap layout. For example, what happens when we declare variables with `let` vs `var`. How do the allocations for `Holey` arrays differ from `packed` arrays, for both the object and backing store? For now, I will rely on runtime analysis to provide those answers. However, when it comes to reviewing the security of an application, an in-depth understanding of this code would really help. I at least hope I have provided a baseline to answer these questions and covered enough to get to the next post, which will involve building exploitation primitives.
+Taking a deeper dive into the code would be useful for understanding how different scenarios affect the heap layout. For example, what exactly happens when we declare variables with `let` vs `var`. How do the allocations for `Holey` arrays differ from `packed` arrays, for both the object and backing store? For now, I will rely on runtime analysis to provide those answers. However, when it comes to reviewing the security of an application, an in-depth understanding of this code would really help. I at least hope I have provided a baseline to answer these questions and covered enough to get to the next post, which will involve building exploitation primitives.
 
 ## Conclusion
 
