@@ -11,14 +11,19 @@ You would want these functions to be fast, and historically many were written in
 V8 team was soon looking for a abstraction / system which let's them write the bultins once and use then use them across the platforms, while retaining the architecture specific optimizations.
 
 
-### Fits like my old sock
+### Fits like an old sock
 
 Okay Pandu, fine I get what builtins are. But I still quite don't get how it really fits into the bigger picture of the assets that V8 produces, codebase and the controlflow. Could you maybe, go a little deeper from the codeflow prespective? 
 
 ![](https://i.imgur.com/WayerLo.gif)
 
-[Embedded Builtins](https://v8.dev/blog/embedded-builtins) provides some great context on the entire rational behind builtins. Below is key parts based on my understanding of the document
+[Embedded Builtins](https://v8.dev/blog/embedded-builtins) provides some great context on the entire rational behind builtins.  Below is key parts based on my understanding of the document:
+- The idea of builtins is similar to the way we have DLLs and .so files in Windows & UNIX respectively. The idea is to share JS code accross V8 Isolates. Imagine having the entire codebase which implements the ECMAScript standard over and over again for each instance of V8 Isolate. Not very efficient.
+- This was historically hard to implement because:
 
+> Generated builtin code was neither isolate- nor process-independent due to embedded pointers to isolate- and process-specific data. V8 had no concept of executing generated code located outside the managed heap.
+
+If you're intrested on why and how bultins & snapshots function, highly recommend reading [Embedded Builtins](https://v8.dev/blog/embedded-builtins).
 
 ## Enter CodeStubAssembler
 
@@ -33,11 +38,30 @@ CSA contains code to generate IR for low level operations like "load this object
 
 ### Test Triving CSA
 
-Here we will look into the code in much more detail than what the introduction post goes into.
+Well that's goodlooking and everything, but let's have a deeper hands on look at the CSA.
 
 #### Example 1
 Now let's do through the example from [CSA Embedding Post](https://v8.dev/docs/csa-builtins)from V8 Blog. 
 
+##### Task 1: Declare the builtin
+
+For the builtin to be picked by the `mksnapshot.exe`, we first need to declare it in the `src/builtins/builtins-definitions.h`. Here, you can have [multiple kinds](https://chromium.googlesource.com/external/github.com/v8/v8.wiki/+/30daab8a92562c331c93470f54877fa02b9422b5/CodeStubAssembler-Builtins.md) of builtins, each with specific usecases in mind, which are not at all apperent at first. Below are few starting points for each:
+- `CPP`: Builtin in C++. Entered via BUILTIN_EXIT frame.
+    - [starCTF's OOB V8](https://web.archive.org/web/20200907163615/https://faraz.faith/2019-12-13-starctf-oob-v8-indepth/) problem made use of it, to introduce a builtins to make an off by one, out of bounds access.
+- `TFJ`: Builtin in Turbofan, with JS linkage (callable as Javascript function)
+    - These builtins are concise, easy to read and often called as javascript functions, though not as fast.  
+    - V8 Blog example: [Math42](https://v8.dev/docs/csa-builtins#declaring-mathis42) (discussed in this section)
+- `TFS`: Builtin in TurboFan, with CodeStub linkage
+    - These builtins are usually used to extract out commonly used code since these can be called from other builtins (multiple callers).
+    - V8 Blog example: [Math42extension](https://v8.dev/docs/csa-builtins#defining-and-calling-a-builtin-with-stub-linkage)
+- `TFC`: Builtin in Turbofan, with CodeStub linkage and custom descriptor.
+    - In my experience, these are usually used for implementing operator overloads like [stringEqual](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/builtins/builtins-definitions.h;l=111;drc=40ad911657e160af18dfc0ebe36c0ea3078fbf25) and [definition](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/builtins/builtins-string-gen.cc;l=724;drc=74a9b9c4d8dbddabdbb2df4bceb9e0d4b4369898).
+- `TFH`: Handlers in Turbofan, with CodeStub linkage.
+- `BCH`: Bytecode Handlers, with bytecode dispatch linkage.
+- `ASM`: Builtin in platform-dependent assembly.
+    - Highly optimzied versions, usually used for builtins which are called very often, constructors etc.
+    - Example:  
+  
 ```diff
 diff --git a/src/builtins/builtins-definitions.h b/src/builtins/builtins-definitions.h
 index 53fd43ad53..c502dd5304 100644
@@ -149,13 +173,18 @@ Now let's do through the example from [CSA Introduction Post](https://v8.dev/blo
 
 ## A little more snug: Torque
 
+CSA is great! Provides us all the low level optimizations we want from builtins, while keeping arhitecture specific nitti-gritties away from us. However, looking at the CSA example we say ealier, it's very similar to assembly itself (with GOTOs). Secondly, we need to manually do a lot of checks for the node types, resulting in still more code. Looks like a place for some more abstraction. This is where torque comes in.
+> V8 Torque: is a V8-specific domain-specific language that is translated to CodeStubAssembler. As such, it extends upon CodeStubAssembler and offers static typing as well as readable and expressive syntax.
+
+Torque thus basically is a wrapper over CSA, which makes things easier (somewhat) for V8 dev writing the builtins. It's most useful when you're using other exisiting CSA/ASM builtins to do somthing more powerful.
+
 ![](https://i.imgur.com/jgO8e0O.png)
+
+To summarize, your torque file is compiled to CSA code before it's integrated into the snapshot file.
 
 ![](https://v8.dev/_img/docs/torque/build-process.svg)
 
 ### Test Driving Torque
-
-
 
 
 ### References
