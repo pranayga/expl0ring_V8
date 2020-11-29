@@ -1,4 +1,4 @@
-# Implementing String Taint tracking in Chromium
+# Implementing String Taint tracking in Chromium - V8 (I)
 > Documentation is a love letter that you write to your future self. - Damian Conway
 
 Commit SHA: 600241ea64
@@ -579,7 +579,6 @@ index a870c0b638..0987c508f3 100644
  src/builtins/builtins-constructor-gen.cc           |    6 +
  src/builtins/builtins-definitions.h                |   11 +-
  src/builtins/builtins-function.cc                  |   10 +
- src/builtins/builtins-global.cc                    |   36 +
 ```
 The builtins are the heart and soul of the changes from a javascript file's prespective. There are two ways for taint to get generated/propogated:
 - due to builtins getting called from the embedded V8 calls
@@ -588,6 +587,8 @@ The builtins are the heart and soul of the changes from a javascript file's pres
     - happens due to javscript calls inside V8
 
 the builtins are triggered for all the javascript code compilation. The builtins define the operation on internal objects based on the ECMAScript specification.
+
+**Before you go any further**, the following subsections will make a whole lot of sense if you have played around with bultins before. Highly recommend follow thought this [guide](https://v8.dev/docs/csa-builtins) and getting a feel for builtins.
 
 ```diff
 diff --git a/src/bootstrapper.cc b/src/bootstrapper.cc
@@ -635,7 +636,219 @@ In the above snippet, we are installing multiple builtins which would allow us t
 
 Lastly, we said above that these are functions which we can call. It's fair to assume that not normal script would be calling it itself. Rather, these allow us to see the operations. Thus, we still have a missing link on how exactly does the taint get transferred during the interaction between the strings. You would agree that in order to do it, we would have to change primitve string operations like creation, append etc. These are looked at mainly in the `builtins-x64.cc` since these operation are implemented in platform dependent way, with the goal of making them snappy.
 
-##### 5(i): String CSA
+```diff
+diff --git a/src/builtins/builtins-api.cc b/src/builtins/builtins-api.cc
+index e1c76c0fd9..1fc4663902 100644
+--- a/src/builtins/builtins-api.cc
++++ b/src/builtins/builtins-api.cc
+@@ -166,7 +166,8 @@ MaybeHandle<Object> Builtins::InvokeApiFunction(Isolate* isolate,
+                                                 Handle<HeapObject> function,
+                                                 Handle<Object> receiver,
+                                                 int argc, Handle<Object> args[],
+-                                                Handle<HeapObject> new_target) {
++                                                Handle<HeapObject> new_target,
++                                                tainttracking::FrameType frametype) {
+   RuntimeCallTimerScope timer(isolate,
+                               RuntimeCallCounterId::kInvokeApiFunction);
+   DCHECK(function->IsFunctionTemplateInfo() ||
+@@ -202,6 +203,12 @@ MaybeHandle<Object> Builtins::InvokeApiFunction(Isolate* isolate,
+     }
+   }
+ 
++  tainttracking::RuntimePrepareSymbolicStackFrame(isolate, frametype);
++  for (int i = 0; i < argc; i++) {
++    tainttracking::RuntimeAddLiteralArgumentToStackFrame(isolate, args[i]);
++  }
++  tainttracking::RuntimeEnterSymbolicStackFrame(isolate);
++
+   Handle<FunctionTemplateInfo> fun_data =
+       function->IsFunctionTemplateInfo()
+           ? Handle<FunctionTemplateInfo>::cast(function)
+@@ -240,6 +247,9 @@ MaybeHandle<Object> Builtins::InvokeApiFunction(Isolate* isolate,
+                                           fun_data, receiver, arguments);
+     }
+   }
++
++  tainttracking::RuntimeExitSymbolicStackFrame(isolate);
++
+   if (argv != small_argv) delete[] argv;
+   return result;
+ }
+@@ -266,6 +276,19 @@ V8_WARN_UNUSED_RESULT static Object HandleApiCallAsFunctionOrConstructor(
+     new_target = ReadOnlyRoots(isolate).undefined_value();
+   }
+ 
++// XXXstroucki this will fail CallAsFunction due to sealed HandleScope
++// also test-api/MicrotaskContextShouldBeNativeContext
++// also test-api/SetCallAsFunctionHandlerConstructor
++/*
++  tainttracking::RuntimePrepareSymbolicStackFrame(
++      isolate, tainttracking::FrameType::UNKNOWN_EXTERNAL);
++  for (int i = 0; i < args.length(); i++) {
++    tainttracking::RuntimeAddLiteralArgumentToStackFrame(
++        isolate, handle(args[i], isolate));
++  }
++  tainttracking::RuntimeEnterSymbolicStackFrame(isolate);
++*/
++
+   // Get the invocation callback from the function descriptor that was
+   // used to create the called object.
+   DCHECK(obj->map()->is_callable());
+@@ -291,6 +314,9 @@ V8_WARN_UNUSED_RESULT static Object HandleApiCallAsFunctionOrConstructor(
+       result = *result_handle;
+     }
+   }
++
++  tainttracking::RuntimeExitSymbolicStackFrame(isolate);
++
+   // Check for exceptions and return result.
+   RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
+   return result;
+diff --git a/src/builtins/builtins-constructor-gen.cc b/src/builtins/builtins-constructor-gen.cc
+index 08a03c4485..cc751a206f 100644
+--- a/src/builtins/builtins-constructor-gen.cc
++++ b/src/builtins/builtins-constructor-gen.cc
+@@ -249,6 +249,12 @@ Node* ConstructorBuiltinsAssembler::EmitFastNewFunctionContext(
+   StoreMapNoWriteBarrier(function_context, context_type);
+   TNode<IntPtrT> min_context_slots = IntPtrConstant(Context::MIN_CONTEXT_SLOTS);
+   // TODO(ishell): for now, length also includes MIN_CONTEXT_SLOTS.
++
++  #ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
++  // Adding space for taint info
++  slots = assembler->Word32Shl(slots, assembler->Int32Constant(1));
++  #endif
++
+   TNode<IntPtrT> length = IntPtrAdd(slots, min_context_slots);
+   StoreObjectFieldNoWriteBarrier(function_context, Context::kLengthOffset,
+                                  SmiTag(length));
+diff --git a/src/builtins/builtins-definitions.h b/src/builtins/builtins-definitions.h
+index 14a0d3ef11..b3bf0fc22d 100644
+--- a/src/builtins/builtins-definitions.h
++++ b/src/builtins/builtins-definitions.h
+@@ -639,7 +639,10 @@ namespace internal {
+   TFJ(GlobalIsFinite, 1, kReceiver, kNumber)                                   \
+   /* ES6 #sec-isnan-number */                                                  \
+   TFJ(GlobalIsNaN, 1, kReceiver, kNumber)                                      \
+-                                                                               \
++  /* TaintData */                                                            \
++  CPP(GlobalPrintToTaintLog)                                                 \
++  CPP(GlobalTaintConstants)                                                  \
++  CPP(GlobalSetTaint)                                                        \
+   /* JSON */                                                                   \
+   CPP(JsonParse)                                                               \
+   CPP(JsonStringify)                                                           \
+@@ -1133,6 +1136,12 @@ namespace internal {
+   TFJ(StringPrototypeTrimEnd, SharedFunctionInfo::kDontAdaptArgumentsSentinel) \
+   TFJ(StringPrototypeTrimStart,                                                \
+       SharedFunctionInfo::kDontAdaptArgumentsSentinel)                         \
++  /* taint stuff */                                                          \
++  CPP(StringPrototypeTaintCount) \
++  CPP(StringPrototypeGetAddress) \
++  CPP(StringPrototypeSetTaint)                                               \
++  CPP(StringPrototypeGetTaint)                                               \
++  CPP(StringPrototypeCheckTaint)                                             \
+   /* ES6 #sec-string.prototype.valueof */                                      \
+   TFJ(StringPrototypeValueOf, 0, kReceiver)                                    \
+   /* ES6 #sec-string.raw */                                                    \
+diff --git a/src/builtins/builtins-function.cc b/src/builtins/builtins-function.cc
+index cd68b261cc..6259bf8d8f 100644
+--- a/src/builtins/builtins-function.cc
++++ b/src/builtins/builtins-function.cc
+@@ -50,6 +50,11 @@ MaybeHandle<Object> CreateDynamicFunction(Isolate* isolate,
+         ASSIGN_RETURN_ON_EXCEPTION(
+             isolate, param, Object::ToString(isolate, args.at(i)), Object);
+         param = String::Flatten(isolate, param);
++
++        tainttracking::LogIfTainted(Handle<String>::cast(param),
++                                    tainttracking::TaintSinkLabel::JAVASCRIPT,
++                                    i - 1);
++
+         builder.AppendString(param);
+       }
+     }
+@@ -60,6 +65,11 @@ MaybeHandle<Object> CreateDynamicFunction(Isolate* isolate,
+       Handle<String> body;
+       ASSIGN_RETURN_ON_EXCEPTION(
+           isolate, body, Object::ToString(isolate, args.at(argc)), Object);
++
++      tainttracking::LogIfTainted(Handle<String>::cast(body),
++                                  tainttracking::TaintSinkLabel::JAVASCRIPT,
++                                  argc - 1);
++
+       builder.AppendString(body);
+     }
+     builder.AppendCString("\n})");
+```
+
+##### 5(i): Global Builtins
+```
+ src/builtins/builtins-global.cc                    |   36 +
+```
+..........................
+```diff
+diff --git a/src/builtins/builtins-global.cc b/src/builtins/builtins-global.cc
+index 83820de135..c6c9c35b54 100644
+--- a/src/builtins/builtins-global.cc
++++ b/src/builtins/builtins-global.cc
+@@ -8,6 +8,7 @@
+ #include "src/compiler.h"
+ #include "src/counters.h"
+ #include "src/objects-inl.h"
++#include "src/taint_tracking.h"
+ #include "src/uri.h"
+ 
+ namespace v8 {
+@@ -87,6 +88,11 @@ BUILTIN(GlobalEval) {
+   Handle<JSFunction> target = args.target();
+   Handle<JSObject> target_global_proxy(target->global_proxy(), isolate);
+   if (!x->IsString()) return *x;
++
++  tainttracking::LogIfTainted(Handle<String>::cast(x),
++                              tainttracking::TaintSinkLabel::JAVASCRIPT,
++                              0);
++
+   if (!Builtins::AllowDynamicFunction(isolate, target, target_global_proxy)) {
+     isolate->CountUsage(v8::Isolate::kFunctionConstructorReturnedUndefined);
+     return ReadOnlyRoots(isolate).undefined_value();
+@@ -102,5 +108,35 @@ BUILTIN(GlobalEval) {
+       Execution::Call(isolate, function, target_global_proxy, 0, nullptr));
+ }
+ 
++BUILTIN(GlobalPrintToTaintLog) {
++  HandleScope scope(isolate);
++  Handle<String> string;
++  Handle<String> extra;
++  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
++      isolate, string,
++      Object::ToString(isolate, args.atOrUndefined(isolate, 1)));
++  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
++      isolate, extra,
++      Object::ToString(isolate, args.atOrUndefined(isolate, 2)));
++  tainttracking::JSTaintLog(string, extra);
++  return ReadOnlyRoots(isolate).undefined_value();
++}
++
++BUILTIN(GlobalTaintConstants) {
++  HandleScope scope(isolate);
++  return *tainttracking::JSTaintConstants(isolate);
++}
++
++BUILTIN(GlobalSetTaint) {
++  HandleScope scope(isolate);
++  uint32_t taint_value;
++  if (args.atOrUndefined(isolate, 2)->ToUint32(&taint_value)) {
++    tainttracking::SetTaint(
++        args.atOrUndefined(isolate, 1),
++        static_cast<tainttracking::TaintType>(taint_value));
++  }
++  return ReadOnlyRoots(isolate).undefined_value();
++}
++
+ }  // namespace internal
+ }  // namespace v8
+```
+
+##### 5(ii): String CSA
 ```
  src/builtins/builtins-string-gen.cc                |   33 +-
  src/builtins/builtins-string.cc                    |   64 +
@@ -643,7 +856,511 @@ Lastly, we said above that these are functions which we can call. It's fair to a
  src/builtins/x64/builtins-x64.cc                   |  227 +-
 ```
 
-##### 5(ii): Making CSA play well
+```diff
+diff --git a/src/builtins/builtins-string-gen.cc b/src/builtins/builtins-string-gen.cc
+index 085ffcfafa..25205049c5 100644
+--- a/src/builtins/builtins-string-gen.cc
++++ b/src/builtins/builtins-string-gen.cc
+@@ -623,10 +623,13 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+   }
+ 
+   Node* code16 = nullptr;
++  TNode<IntPtrT> one_byte_taint_start;
+   BIND(&if_notoneargument);
+   {
+     Label two_byte(this);
+     // Assume that the resulting string contains only one-byte characters.
++    TNode<IntPtrT> taint_start = IntPtrAdd(ChangeInt32ToIntPtr(argc), ChangeInt32ToIntPtr(Int32Constant(SeqOneByteString::kHeaderSize - kHeapObjectTag)));
++    one_byte_taint_start = taint_start;
+     Node* one_byte_result = AllocateSeqOneByteString(context, Unsigned(argc));
+ 
+     TVARIABLE(IntPtrT, var_max_index);
+@@ -637,7 +640,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+     // in 8 bits.
+     CodeStubAssembler::VariableList vars({&var_max_index}, zone());
+     arguments.ForEach(vars, [this, context, &two_byte, &var_max_index, &code16,
+-                             one_byte_result](Node* arg) {
++                             one_byte_result, taint_start](Node* arg) {
+       Node* code32 = TruncateTaggedToWord32(context, arg);
+       code16 = Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
+ 
+@@ -652,6 +655,11 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+           SeqOneByteString::kHeaderSize - kHeapObjectTag);
+       StoreNoWriteBarrier(MachineRepresentation::kWord8, one_byte_result,
+                           offset, code16);
++      // Init taint with 0's
++      StoreNoWriteBarrier(
++        MachineRepresentation::kWord8, one_byte_result,
++        IntPtrAdd(taint_start, offset),
++        Int32Constant(0));
+       var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
+     });
+     arguments.PopAndReturn(one_byte_result);
+@@ -663,10 +671,13 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+     // string.
+     Node* two_byte_result = AllocateSeqTwoByteString(context, Unsigned(argc));
+ 
++    Node* length_double = WordShl(ChangeUint32ToWord(Unsigned(argc)), 1);
++    Node* ctaint_start = IntPtrAdd(IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag), length_double);
++
+     // Copy the characters that have already been put in the 8-bit string into
+     // their corresponding positions in the new 16-bit string.
+     TNode<IntPtrT> zero = IntPtrConstant(0);
+-    CopyStringCharacters(one_byte_result, two_byte_result, zero, zero,
++    CopyStringCharacters(one_byte_result, two_byte_result, one_byte_taint_start, zero, zero,
+                          var_max_index.value(), String::ONE_BYTE_ENCODING,
+                          String::TWO_BYTE_ENCODING);
+ 
+@@ -677,6 +688,15 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+                                SeqTwoByteString::kHeaderSize - kHeapObjectTag);
+     StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
+                         max_index_offset, code16);
++
++     // Init taint with 0's TODO: does this work?
++    StoreNoWriteBarrier(
++      MachineRepresentation::kWord8, two_byte_result,
++      IntPtrAdd(
++        ctaint_start,
++        max_index_offset),
++      Int32Constant(0));
++
+     var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
+ 
+     // Resume copying the passed-in arguments from the same place where the
+@@ -684,7 +704,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+     // using a 16-bit representation.
+     arguments.ForEach(
+         vars,
+-        [this, context, two_byte_result, &var_max_index](Node* arg) {
++        [this, context, two_byte_result, ctaint_start, max_index_offset, &var_max_index](Node* arg) {
+           Node* code32 = TruncateTaggedToWord32(context, arg);
+           Node* code16 =
+               Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
+@@ -695,6 +715,13 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
+               SeqTwoByteString::kHeaderSize - kHeapObjectTag);
+           StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
+                               offset, code16);
++          // Init taint with 0's TODO: does this work?
++          StoreNoWriteBarrier(
++            MachineRepresentation::kWord8, two_byte_result,
++            IntPtrAdd(
++              ctaint_start,
++              max_index_offset),
++            Int32Constant(0));
+           var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
+         },
+         var_max_index.value());
+diff --git a/src/builtins/builtins-string.cc b/src/builtins/builtins-string.cc
+index d656c8769c..0b98a2ecb1 100644
+--- a/src/builtins/builtins-string.cc
++++ b/src/builtins/builtins-string.cc
+@@ -436,6 +436,7 @@ V8_WARN_UNUSED_RESULT static Object ConvertCaseHelper(
+     current = next;
+   }
+   if (has_changed_character) {
++    tainttracking::OnConvertCase(string, result);
+     return result;
+   } else {
+     // If we didn't actually change anything in doing the conversion
+@@ -473,6 +474,8 @@ V8_WARN_UNUSED_RESULT static Object ConvertCase(
+         reinterpret_cast<char*>(result->GetChars(no_gc)),
+         reinterpret_cast<const char*>(flat_content.ToOneByteVector().start()),
+         length, &has_changed_character);
++    // XXXstroucki not care about has_changed_character?
++    tainttracking::OnConvertCase(*s, *result);
+     // If not ASCII, we discard the result and take the 2 byte path.
+     if (index_to_first_unprocessed == length)
+       return has_changed_character ? *result : *s;
+@@ -592,5 +595,66 @@ BUILTIN(StringRaw) {
+   RETURN_RESULT_OR_FAILURE(isolate, result_builder.Finish());
+ }
+ 
++BUILTIN(StringPrototypeTaintCount) {
++  HandleScope scope(isolate);
++  TO_THIS_STRING(string, "String.prototype.__taintCount__");
++exit(0);
++  return *(isolate->factory()->undefined_value());
++}
++
++BUILTIN(StringPrototypeGetAddress) {
++  HandleScope scope(isolate);
++  TO_THIS_STRING(string, "String.prototype.__getAddress__");
++
++static volatile int foo = 0;while (foo){;};
++  char address[19];
++  snprintf(address, 19, "%p", string->GetAddress());
++  Handle<String> answer =
++      isolate->factory()->NewStringFromAsciiChecked(address);
++  return *answer;
++}
++
++BUILTIN(StringPrototypeSetTaint) {
++  HandleScope scope(isolate);
++  TO_THIS_STRING(string, "String.prototype.__setTaint__");
++  uint32_t taint_value;
++  Handle<Object> taint_arg = args.atOrUndefined(isolate, 1);
++  if (taint_arg->ToUint32(&taint_value)) {
++    tainttracking::SetTaintString(
++        string, static_cast<tainttracking::TaintType>(taint_value));
++    return *(isolate->factory()->undefined_value());
++  } else if (taint_arg->IsJSArrayBuffer()) {
++    JSArrayBuffer taint_data = JSArrayBuffer::cast(*taint_arg);
++    int len = (int)taint_data->byte_length(); // XXXstroucki dumb
++    if (!len) {
++      THROW_NEW_ERROR_RETURN_FAILURE(
++        isolate, NewTypeError(MessageTemplate::kInvalidArgument, taint_arg));
++    }
++    if (len != string->length()) {
++      THROW_NEW_ERROR_RETURN_FAILURE(
++        isolate, NewTypeError(MessageTemplate::kInvalidArgument, taint_arg));
++    }
++    tainttracking::JSSetTaintBuffer(string, handle(taint_data, isolate));
++    return *(isolate->factory()->undefined_value());
++  }
++  THROW_NEW_ERROR_RETURN_FAILURE(
++      isolate, NewTypeError(MessageTemplate::kInvalidArgument, taint_arg));
++}
++
++BUILTIN(StringPrototypeGetTaint) {
++  HandleScope scope(isolate);
++  TO_THIS_STRING(string, "String.prototype.__getTaint__");
++  return *tainttracking::JSGetTaintStatus(string, isolate);
++}
++
++BUILTIN(StringPrototypeCheckTaint) {
++  HandleScope scope(isolate);
++  TO_THIS_STRING(string, "String.prototype.__checkTaint__");
++  return *(tainttracking::JSCheckTaintMaybeLog(
++                   string,
++                   args.atOrUndefined(isolate, 1),
++                   0));
++}
++
+ }  // namespace internal
+ }  // namespace v8
+```
+##### 5(iii): assembly CSA builtins
+```
+ src/builtins/builtins.h                            |    3 +-
+ src/builtins/x64/builtins-x64.cc                   |  227 +-
+```
+```diff
+diff --git a/src/builtins/builtins.h b/src/builtins/builtins.h
+index 7ea440e004..8fbdad3a27 100644
+--- a/src/builtins/builtins.h
++++ b/src/builtins/builtins.h
+@@ -154,7 +154,8 @@ class Builtins {
+   V8_WARN_UNUSED_RESULT static MaybeHandle<Object> InvokeApiFunction(
+       Isolate* isolate, bool is_construct, Handle<HeapObject> function,
+       Handle<Object> receiver, int argc, Handle<Object> args[],
+-      Handle<HeapObject> new_target);
++      Handle<HeapObject> new_target,
++      tainttracking::FrameType frametype = tainttracking::FrameType::UNKNOWN_EXTERNAL);
+ 
+   enum ExitFrameType { EXIT, BUILTIN_EXIT };
+ 
+diff --git a/src/builtins/x64/builtins-x64.cc b/src/builtins/x64/builtins-x64.cc
+index 0f0ca80311..2e5ba21887 100644
+--- a/src/builtins/x64/builtins-x64.cc
++++ b/src/builtins/x64/builtins-x64.cc
+@@ -20,6 +20,7 @@
+ #include "src/objects/js-generator.h"
+ #include "src/objects/smi.h"
+ #include "src/register-configuration.h"
++#include "src/taint_tracking.h"
+ #include "src/wasm/wasm-linkage.h"
+ #include "src/wasm/wasm-objects.h"
+ 
+@@ -75,6 +76,205 @@ static void GenerateTailCallToReturnedCode(MacroAssembler* masm,
+ 
+ namespace {
+ 
++inline void GenerateTaintTrackingPrepareApply(
++    MacroAssembler* masm, tainttracking::FrameType caller_frame_type) {
++  #ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
++
++  // ----------- S t a t e -------------
++  //  -- rax    : argumentsList
++  //  -- rdi    : target
++  //  -- rdx    : new.target (checked to be constructor or undefined)
++  //  -- rsp[0] : return address.
++  //  -- rsp[8] : thisArgument
++  // -----------------------------------
++
++
++  __ movp(rcx, Operand(rsp, kPointerSize));
++
++  // Store caller save registers
++  __ Push(rax);
++  __ Push(rdx);
++  __ Push(rdi);
++
++  {
++    FrameScope scope(masm, StackFrame::INTERNAL);
++
++    // Push arguments to runtime call
++    __ Push(rax); // argumentsList
++    __ Push(rdi); // target
++    __ Push(rdx); // new.target
++    __ Push(rcx); // thisArgument
++
++    __ Push(Smi::FromInt(static_cast<int>(caller_frame_type)));
++
++    __ CallRuntime(Runtime::kTaintTrackingPrepareApply, 5);
++  }
++
++  // Restore caller save registers
++  __ Pop(rdi);
++  __ Pop(rdx);
++  __ Pop(rax);
++
++  #endif
++}
++
++#ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
++inline void GeneratePushArgumentLoop(MacroAssembler* masm, Register scratch) {
++  // ----------- S t a t e -------------
++  //  -- rax                 : the number of arguments (not including the receiv
++er)
++  //
++  //  -- rsp[0]              : return address
++  //  -- rsp[8]              : last argument
++  //  -- ...
++  //  -- rsp[8 * argc]       : first argument
++  //  -- rsp[8 * (argc + 1)] : receiver
++  // -----------------------------------
++
++
++  // Loop through all the arguments starting from rsp[8 * argc] and going to
++  // rsp[8].
++  Label loop, done;
++  __ testp(rax, rax);
++  __ j(zero, &done, Label::kNear);
++  __ movp(scratch, rax);
++  __ bind(&loop);
++
++  // Push rsp[scratch * kPointerSize]
++  __ Push(Operand(r11, scratch, times_pointer_size, 0));
++  __ decp(scratch);
++  __ j(not_zero, &loop);              // While non-zero.
++  __ bind(&done);
++}
++#endif
++
++inline void GenerateTaintTrackingPrepareCall(
++    MacroAssembler* masm, tainttracking::FrameType caller_frame_type) {
++  #ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
++
++  // ----------- S t a t e -------------
++  //  -- rax                 : argc, the number of arguments (not including the
++receiver)
++  //  -- rdi                 : the target to call (can be any Object)
++  //
++  //  -- rsp[0]              : return address
++  //  -- rsp[8]              : last argument
++  //  -- ...
++  //  -- rsp[8 * argc]       : first argument
++  //  -- rsp[8 * (argc + 1)] : receiver
++  // -----------------------------------
++
++
++  {
++    __ movp(r11, rsp);
++    FrameScope scope(masm, StackFrame::INTERNAL);
++
++    // Store caller save registers
++    __ Push(rax);
++    __ Push(rdi);
++    __ Push(rdx);
++    __ Push(rbx);
++
++    // Push arguments to prepare call
++    __ Push(rdi);
++    __ Push(Smi::FromInt(static_cast<int>(caller_frame_type)));
++    __ Push(Operand(r11, rax, times_pointer_size, kPointerSize));
++    GeneratePushArgumentLoop(masm, rcx);
++
++    // Add to rax the number of additional arguments
++    __ addp(rax, Immediate(3));
++
++    __ CallRuntime(Runtime::kTaintTrackingPrepareCall);
++
++    // Restore caller save registers
++    __ Pop(rbx);
++    __ Pop(rdx);
++    __ Pop(rdi);
++    __ Pop(rax);
++  }
++
++  #endif
++}
++
++inline void GenerateTaintTrackingPrepareCallOrConstruct(MacroAssembler* masm) {
++  #ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
++
++  // ----------- S t a t e -------------
++  //  -- rax        : the number of arguments (not including the receiver)
++  //  -- rdi        : the target to call (can be any Object)
++  //  -- rdx        : new.target - If undefined, then prepare for call,
++  //                  otherwise for construct
++  //  -- rsp        : return address
++  //  -- rsp[8 * n] : arguments to call
++  // -----------------------------------
++
++
++  // Store caller save registers
++
++  {
++    __ movp(r11, rsp);
++    FrameScope scope(masm, StackFrame::INTERNAL);
++
++    __ Push(rax);
++    __ Push(rdx);
++    __ Push(rdi);
++
++
++    // Push arguments to prepare call
++    __ Push(rdi);                 // the target to call
++    __ Push(rdx);                 // if undefined, then prepare for call
++                                  // otherwise for a construct call
++
++    // Push arguments from stack frame
++    GeneratePushArgumentLoop(masm, rcx);
++
++    // Add 2 to rax to reflect that the runtime call has 2 more arguments than
++    // the expected number because of the pushed rdi and rdx value
++    __ addp(rax, Immediate(2));
++
++    // Make the call
++    __ CallRuntime(Runtime::kTaintTrackingPrepareCallOrConstruct);
++
++
++    // Restore caller save registers in opposite order
++    __ Pop(rdi);
++    __ Pop(rdx);
++    __ Pop(rax);
++  }
++
++  #endif
++}
++
++inline void GenerateTaintTrackingSetReceiver(MacroAssembler* masm) {
++  #ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
++
++  // State:
++  //
++  // rbx -- new receiver
++
++  FrameScope scope (masm, StackFrame::INTERNAL);
++
++  // Save caller registers
++  __ Push(rax);
++  __ Push(rdx);
++  __ Push(rdi);
++  __ Push(rbx);
++
++  // Push rbx and make the call
++  __ Push(rbx);
++  __ CallRuntime(Runtime::kTaintTrackingAddLiteralReceiver);
++
++  // Restore caller registers
++  __ Pop(rbx);
++  __ Pop(rdi);
++  __ Pop(rdx);
++  __ Pop(rax);
++
++  #endif
++}
++
++
++
+ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
+   // ----------- S t a t e -------------
+   //  -- rax: number of arguments
+@@ -95,6 +295,8 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
+     // The receiver for the builtin/api call.
+     __ PushRoot(RootIndex::kTheHoleValue);
+ 
++    GenerateTaintTrackingSetReceiver(masm);
++
+     // Set up pointer to last argument.
+     __ leap(rbx, Operand(rbp, StandardFrameConstants::kCallerSPOffset));
+ 
+@@ -650,6 +852,13 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
+     __ cmpp(rcx, rax);
+     __ j(not_equal, &loop, Label::kNear);
+ 
++    if (is_construct) {
++      // TODO: prepare for construct
++    } else {
++      // GenerateTaintTrackingPrepareCall(
++      //     masm, tainttracking::FrameType::BUILTIN_JS_TRAMPOLINE);
++    }
++
+     // Invoke the builtin code.
+     Handle<Code> builtin = is_construct
+                                ? BUILTIN_CODE(masm->isolate(), Construct)
+@@ -1666,8 +1875,10 @@ void Builtins::Generate_FunctionPrototypeApply(MacroAssembler* masm) {
+ 
+   // 3. Tail call with no arguments if argArray is null or undefined.
+   Label no_arguments;
+-  __ JumpIfRoot(rbx, RootIndex::kNullValue, &no_arguments, Label::kNear);
+-  __ JumpIfRoot(rbx, RootIndex::kUndefinedValue, &no_arguments, Label::kNear);
++  // billy: Removing the kNear tag to these two function calls because the
++  // GenerateTaintTrackingPrepareApply hook causes the tag to be not near
++  __ JumpIfRoot(rbx, RootIndex::kNullValue, &no_arguments);
++  __ JumpIfRoot(rbx, RootIndex::kUndefinedValue, &no_arguments);
+ 
+   // 4a. Apply the receiver to the given argArray.
+   __ Jump(BUILTIN_CODE(masm->isolate(), CallWithArrayLike),
+@@ -1679,6 +1890,7 @@ void Builtins::Generate_FunctionPrototypeApply(MacroAssembler* masm) {
+   __ bind(&no_arguments);
+   {
+     __ Set(rax, 0);
++    GenerateTaintTrackingPrepareApply(masm, tainttracking::FrameType::BUILTIN_FUNCTION_PROTOTYPE_APPLY);
+     __ Jump(masm->isolate()->builtins()->Call(), RelocInfo::CODE_TARGET);
+   }
+ }
+@@ -1729,6 +1941,9 @@ void Builtins::Generate_FunctionPrototypeCall(MacroAssembler* masm) {
+     __ decp(rax);  // One fewer argument (first argument is new receiver).
+   }
+ 
++  GenerateTaintTrackingPrepareCall(
++      masm, tainttracking::FrameType::BUILTIN_FUNCTION_PROTOTYPE_CALL);
++
+   // 4. Call the callable.
+   // Since we did not create a frame for Function.prototype.call() yet,
+   // we use a normal Call builtin here.
+@@ -1780,6 +1995,9 @@ void Builtins::Generate_ReflectApply(MacroAssembler* masm) {
+   // since that's the first thing the Call/CallWithArrayLike builtins
+   // will do.
+ 
++  GenerateTaintTrackingPrepareApply(
++      masm, tainttracking::FrameType::BUILTIN_REFLECT_APPLY);
++
+   // 3. Apply the target to the given argumentsList.
+   __ Jump(BUILTIN_CODE(masm->isolate(), CallWithArrayLike),
+           RelocInfo::CODE_TARGET);
+@@ -1837,6 +2055,9 @@ void Builtins::Generate_ReflectConstruct(MacroAssembler* masm) {
+   // since that's the second thing the Construct/ConstructWithArrayLike
+   // builtins will do.
+ 
++  GenerateTaintTrackingPrepareApply(
++      masm, tainttracking::FrameType::BUILTIN_REFLECT_CONSTRUCT);
++
+   // 4. Construct the target with the given new.target and argumentsList.
+   __ Jump(BUILTIN_CODE(masm->isolate(), ConstructWithArrayLike),
+           RelocInfo::CODE_TARGET);
+@@ -2077,6 +2298,8 @@ void Builtins::Generate_CallOrConstructVarargs(MacroAssembler* masm,
+     __ addq(rax, r9);
+   }
+ 
++  GenerateTaintTrackingPrepareCallOrConstruct(masm);
++
+   // Tail-call to the actual Call or Construct builtin.
+   __ Jump(code, RelocInfo::CODE_TARGET);
+```
+##### 5(iii): Making CSA play well
 ```
  src/code-stub-assembler.cc                         |  223 +-
  src/code-stub-assembler.h                          |   13 +-
@@ -656,402 +1373,521 @@ Lastly, we said above that these are functions which we can call. It's fair to a
  src/contexts.cc                                    |   15 +-
  src/contexts.h                                     |    5 +-
 ```
-#### 6. Adjusting AST
-```
- src/ast/ast-value-factory.cc                       |    2 +-
- src/ast/ast.cc                                     |    8 +
- src/ast/ast.h                                      |   14 +-
- src/base/logging.cc                                |    1 +
-
-```
-```
- src/d8.cc                                          |    3 +-
- src/debug/debug-coverage.cc                        |    4 +-
- src/debug/liveedit.cc                              |    3 +-
- s
- rc/deoptimizer.h                                  |    2 +-
- src/execution.cc                                   |   17 +-
- src/execution.h                                    |    3 +-
- src/extensions/externalize-string-extension.cc     |   24 +-
- src/external-reference-table.cc                    |    9 +
- src/external-reference-table.h                     |    5 +-
- src/external-reference.cc                          |    6 +
- src/external-reference.h                           |    2 +
- src/flag-definitions.h                             |   49 +
- src/frames.cc                                      |   41 +
- src/frames.h                                       |   19 +
- src/globals.h                                      |   56 +
- src/heap/factory.cc                                |  137 +-
- src/heap/factory.h                                 |    1 +
- src/heap/heap-inl.h                                |    1 +
- src/heap/heap.cc                                   |    2 +-
- src/interpreter/bytecode-array-builder.cc          |    6 +-
- src/interpreter/bytecode-array-builder.h           |   19 +-
- src/interpreter/bytecode-array-writer.cc           |    3 +-
- src/interpreter/bytecode-generator.cc              |  119 +-
- src/interpreter/bytecode-generator.h               |    5 +
- src/interpreter/bytecode-source-info.h             |   34 +-
- src/isolate.cc                                     |   35 +-
- src/isolate.h                                      |    7 +
- src/json-parser.cc                                 |   25 +-
- src/json-parser.h                                  |    1 +
- src/json-stringifier.cc                            |   51 +-
- src/objects-inl.h                                  |   15 +-
- src/objects.cc                                     |  131 +-
- src/objects.h                                      |    9 +-
- src/objects/code.h                                 |    1 +
- src/objects/free-space-inl.h                       |    5 +
- src/objects/js-objects.h                           |    4 +-
- src/objects/name.h                                 |    8 +-
- src/objects/scope-info.cc                          |   55 +-
- src/objects/scope-info.h                           |    6 +
- src/objects/shared-function-info-inl.h             |    1 +
- src/objects/shared-function-info.h                 |    3 +
- src/objects/string-inl.h                           |   35 +
- src/objects/string-table.h                         |    3 +-
- src/objects/string.h                               |   22 +-
- src/parsing/parse-info.cc                          |    3 +
- src/parsing/parse-info.h                           |   11 +
- src/parsing/parser.h                               |    3 +
- src/roots.h                                        |    1 +
- src/runtime/runtime-compiler.cc                    |    6 +
- src/runtime/runtime-function.cc                    |    2 +-
- src/runtime/runtime-internal.cc                    |  241 ++
- src/runtime/runtime-regexp.cc                      |   25 +
- src/runtime/runtime-scopes.cc                      |   56 +-
- src/runtime/runtime-strings.cc                     |   74 +-
- src/runtime/runtime.h                              |   25 +-
- src/snapshot/code-serializer.cc                    |   11 +-
- src/snapshot/deserializer.cc                       |    6 +
- src/snapshot/deserializer.h                        |    1 +
- src/snapshot/natives.h                             |    3 +-
- src/snapshot/serializer.cc                         |    9 +
- src/snapshot/snapshot-source-sink.cc               |    1 +
- src/snapshot/snapshot-source-sink.h                |   14 +-
- src/source-position-table.cc                       |   10 +-
- src/source-position-table.h                        |   21 +-
- src/string-builder-inl.h                           |   45 +-
- src/string-builder.cc                              |   32 +-
-```
-
-#### X. Taint Tracking Logic
-
-```
- src/taint_tracking-inl.h                           |  288 ++
- src/taint_tracking.h                               |  489 +++
- src/taint_tracking/ast_serialization.cc            | 4191 ++++++++++++++++++++
- src/taint_tracking/ast_serialization.h             |  700 ++++
- src/taint_tracking/capnp-diff.patch                |   27 +
- src/taint_tracking/log_listener.h                  |   18 +
- src/taint_tracking/object_versioner.cc             |  509 +++
- src/taint_tracking/object_versioner.h              |  179 +
- src/taint_tracking/protos/ast.capnp                |  765 ++++
- src/taint_tracking/protos/logrecord.capnp          |  351 ++
- src/taint_tracking/symbolic_state.cc               |  859 ++++
- src/taint_tracking/symbolic_state.h                |  391 ++
- src/taint_tracking/taint_tracking.cc               | 3080 ++++++++++++++
- src/taint_tracking/third_party/picosha2.h          |  395 ++
- src/unoptimized-compilation-info.cc                |    1 +
- src/unoptimized-compilation-info.h                 |    5 +
- src/uri.cc                                         |  157 +-
- src/v8.cc                                          |    2 +
- src/wasm/baseline/liftoff-compiler.cc              |   10 +-
- test/cctest/BUILD.gn                               |    1 +
- test/cctest/cctest.h                               |    3 +-
- test/cctest/heap/test-external-string-tracker.cc   |    3 +-
- test/cctest/heap/test-heap.cc                      |    6 +-
- .../bytecode_expectations/ContextVariables.golden  |    6 +-
- .../bytecode_expectations/CreateArguments.golden   |    8 +-
- .../bytecode_expectations/Delete.golden            |    6 +-
- .../bytecode_expectations/ForAwaitOf.golden        |   13 +-
- .../interpreter/bytecode_expectations/ForIn.golden |   20 +-
- .../interpreter/bytecode_expectations/ForOf.golden |   11 +-
- .../GlobalCountOperators.golden                    |    3 +-
- .../bytecode_expectations/GlobalDelete.golden      |    3 +-
- .../IIFEWithOneshotOpt.golden                      |   83 +-
- .../IIFEWithoutOneshotOpt.golden                   |   38 +-
- .../bytecode_expectations/LoadGlobal.golden        |  386 +-
- .../bytecode_expectations/LookupSlotInEval.golden  |    3 +-
- .../bytecode_expectations/Modules.golden           |    5 +-
- .../bytecode_expectations/PropertyCall.golden      |  412 +-
- .../bytecode_expectations/PropertyLoads.golden     |  404 +-
- .../bytecode_expectations/PropertyStores.golden    |  782 ++--
- .../bytecode_expectations/StandardForLoop.golden   |    6 +-
- .../bytecode_expectations/StoreGlobal.golden       |  773 ++--
- test/cctest/interpreter/source-position-matcher.cc |    3 +-
- test/cctest/parsing/test-scanner-streams.cc        |    2 +
- test/cctest/test-api.cc                            |   86 +-
- test/cctest/test-heap-profiler.cc                  |    3 +-
- test/cctest/test-log.cc                            |    3 +-
- test/cctest/test-parsing.cc                        |    3 +-
- test/cctest/test-regexp.cc                         |    3 +-
- test/cctest/test-serialize.cc                      |   16 +-
- test/cctest/test-strings.cc                        |   18 +-
- test/cctest/test-taint-tracking.cc                 | 2324 +++++++++++
- test/cctest/test-types.cc                          |    2 +-
- 150 files changed, 19365 insertions(+), 1249 deletions(-)
- create mode 100644 src/taint_tracking-inl.h
- create mode 100644 src/taint_tracking.h
- create mode 100644 src/taint_tracking/ast_serialization.cc
- create mode 100644 src/taint_tracking/ast_serialization.h
- create mode 100644 src/taint_tracking/capnp-diff.patch
- create mode 100644 src/taint_tracking/log_listener.h
- create mode 100644 src/taint_tracking/object_versioner.cc
- create mode 100644 src/taint_tracking/object_versioner.h
- create mode 100644 src/taint_tracking/protos/ast.capnp
- create mode 100644 src/taint_tracking/protos/logrecord.capnp
- create mode 100644 src/taint_tracking/symbolic_state.cc
- create mode 100644 src/taint_tracking/symbolic_state.h
- create mode 100644 src/taint_tracking/taint_tracking.cc
- create mode 100644 src/taint_tracking/third_party/picosha2.h
- create mode 100644 test/cctest/test-taint-tracking.cc
-```
-
-## Chrome Diff breakdown
-Let's start taking a look ny breaking down the changes in the Chrome source code into major chunks. While ther are a lot of gluecode in smaller files, we'll track our way from the bigger changes to the smaller ones.
-Blink [basics](https://docs.google.com/document/d/1aitSOucL0VHZa9Z2vbRJSyAIsAz24kX8LFByQ5xQnUg/edit#heading=h.v5plba74lfde).
-
-#### 1. Basic Setup
-```
-chrome/BUILD.gn                                    |   5 +
-```
-Linking information on the `capnp_lib` has been added in the build process. This is used for taint data commiunication between the V8 engine and blink's backend as far as I can currently understand. 
-
-**TODO**: Probably a good idea to get @michael's view on it.
-
-```
- base/debug/stack_trace_posix.cc                    |   1 +
- base/logging.cc                                    |   1 
-```
-Some minor changes related to logging and not letting the program crash on debug.
-
-#### 2. Importing in the new V8_taint_class into blink
-```
- .../static_v8_external_one_byte_string_resource.h  |   3 +-
- net/proxy_resolution/proxy_resolver_v8.cc          |   6 +-
-
-```
-This change seems to implement `multiple inheritence` on the `StaticV8ExternalOneByteStringResource` which was initially derived from the internal structure in the V8's `public v8::String::ExternalOneByteStringResource` and `public v8::String::TaintTrackingStringBufferImpl` was added to the mix.
 
 ```diff
-diff --git a/extensions/renderer/static_v8_external_one_byte_string_resource.h b/extensions/renderer/static_v8_external_one_byte_string_resource.h
-index 3f569585a7b7..0b69ea4cb7fb 100644
---- a/extensions/renderer/static_v8_external_one_byte_string_resource.h
-+++ b/extensions/renderer/static_v8_external_one_byte_string_resource.h
-@@ -17,7 +17,8 @@ namespace extensions {
- // wraps a buffer. The buffer must outlive the v8 runtime instance this resource
- // is used in.
- class StaticV8ExternalOneByteStringResource
--    : public v8::String::ExternalOneByteStringResource {
-+    : public v8::String::ExternalOneByteStringResource,
-+     public v8::String::TaintTrackingStringBufferImpl {
-  public:
-   explicit StaticV8ExternalOneByteStringResource(
-       const base::StringPiece& buffer);
---- a/net/proxy_resolution/proxy_resolver_v8.cc
-+++ b/net/proxy_resolution/proxy_resolver_v8.cc
-@@ -91,7 +91,8 @@ const char kPacUtilityResourceName[] = "proxy-pac-utility-script.js";
- // External string wrapper so V8 can access the UTF16 string wrapped by
- // PacFileData.
- class V8ExternalStringFromScriptData
--    : public v8::String::ExternalStringResource {
-+    : public v8::String::ExternalStringResource,
-+      public v8::String::TaintTrackingStringBufferImpl {
-  public:
-   explicit V8ExternalStringFromScriptData(
-       const scoped_refptr<PacFileData>& script_data)
-@@ -110,7 +111,8 @@ class V8ExternalStringFromScriptData
+diff --git a/src/code-stub-assembler.cc b/src/code-stub-assembler.cc
+index 8411a7c5da..4980eda073 100644
+--- a/src/code-stub-assembler.cc
++++ b/src/code-stub-assembler.cc
+@@ -3098,6 +3098,23 @@ TNode<UintPtrT> CodeStubAssembler::LoadBigIntDigit(TNode<BigInt> bigint,
+       MachineType::UintPtr()));
+ }
  
- // External string wrapper so V8 can access a string literal.
- class V8ExternalASCIILiteral
--    : public v8::String::ExternalOneByteStringResource {
-+    : public v8::String::ExternalOneByteStringResource,
-+      public v8::String::TaintTrackingStringBufferImpl {
-  public:
-   // |ascii| must be a NULL-terminated C string, and must remain valid
-   // throughout this object's lifetime.
-```
-----
-Proxy Resolver seems to have very similar changes. Wherever we have a class being derived from `v8::String::ExternalOneByteStringResource`, we replace it with a multiple inheritence configuration. Probably to add our taint keeping structures.
-
-
-**TODO**: Reorder this once you understand the significance and inner working of this class.
-
-#### 3. V8 - Message event
-
-```
- .../core/v8/custom/v8_message_event_custom.cc      |  32 +++
-```
-This significant change seem to add some modifications to the V8MessageEvent in order to continue the taint propogation. Some major blink control flow is documented in [basics of blink](https://docs.google.com/document/d/1aitSOucL0VHZa9Z2vbRJSyAIsAz24kX8LFByQ5xQnUg/edit#heading=h.v5plba74lfde).
-
-**TODO**: However, I am still quite unsure on how exactly the message pasing the the V8 embedding work. I am going to contact Michael for some pointers and come back after looking into V8 some more.
-
-```diff
-diff --git a/third_party/blink/renderer/bindings/core/v8/custom/v8_message_event_custom.cc b/third_party/blink/renderer/bindings/core/v8/custom/v8_message_event_custom.cc
-index 864991f2a2f2..184a9fbb39cb 100644
---- a/third_party/blink/renderer/bindings/core/v8/custom/v8_message_event_custom.cc
-+++ b/third_party/blink/renderer/bindings/core/v8/custom/v8_message_event_custom.cc
-@@ -98,6 +98,38 @@ void V8MessageEvent::DataAttributeGetterCustom(
-   // Store the result as a private value so this callback returns the cached
-   // result in future invocations.
-   private_cached_data.Set(info.Holder(), result);
-+
-+  v8::String::SetTaint(result, info.GetIsolate(), v8::String::MESSAGE);
-+
-+  int64_t taint_info = event->TaintTrackingInfo();
-+  if (taint_info == -1) {
-+    taint_info = v8::String::NewUniqueId(info.GetIsolate());
-+    event->SetTaintTrackingInfo(taint_info);
-+  }
-+  v8::String::SetTaintInfo(result, taint_info);
-+  V8SetReturnValue(info, result);
++void CodeStubAssembler::IncrementAndStoreTaintInstanceCounter(Node* result) {
++  // tainttracking::InstanceCounter* counter =
++  //   tainttracking::TaintTracker::FromIsolate(isolate())->
++  //   symbolic_elem_counter();
++  // Node* address = ExternalConstant(ExternalReference(counter));
++  // Node* value = Load(MachineType::Int64(), address);
++  StoreObjectFieldNoWriteBarrier(result, Name::kTaintInfoOffset,
++                                 Int64Constant(Name::DEFAULT_TAINT_INFO),
++                                 MachineRepresentation::kWord64);
++  // if (Is64()) {
++  //   value = IntPtrAdd(value, Int64Constant(1));
++  // } else {
++  //   DCHECK(false);
++  // }
++  // StoreNoWriteBarrier(MachineRepresentation::kWord64, address, value);
 +}
 +
-+void V8MessageEvent::OriginAttributeGetterCustom(const v8::FunctionCallbackInfo<v8::Value>& info) {
-+  MessageEvent* event = V8MessageEvent::ToImpl(info.Holder());
-+  auto* isolate = info.GetIsolate();
-+  v8::Local<v8::String> result = V8String(isolate, event->origin());
-+
-+  int64_t taint_info = event->TaintTrackingInfo();
-+  if (taint_info == -1) {
-+    taint_info = v8::String::NewUniqueId(isolate);
-+    event->SetTaintTrackingInfo(taint_info);
-+  }
-+  DCHECK_NE(taint_info, 0);
-+  DCHECK_NE(taint_info, -1);
-+
-+  if (result->GetTaintInfo() == taint_info) {
-+    V8SetReturnValue(info, result);
-+    return;
-+  }
-+
-+  v8::String::SetTaint(result, isolate, v8::String::MESSAGE_ORIGIN);
-+  v8::String::SetTaintInfo(result, taint_info);
-   V8SetReturnValue(info, result);
- }
-```
-
-#### 4. Local Window Proxy
-```
- .../bindings/core/v8/local_window_proxy.cc         |  22 ++
-```
-```diff
-diff --git a/third_party/blink/renderer/bindings/core/v8/local_window_proxy.cc b/third_party/blink/renderer/bindings/core/v8/local_window_proxy.cc
-index 9c3e848f01ae..0cc09f097ef7 100644
---- a/third_party/blink/renderer/bindings/core/v8/local_window_proxy.cc
-+++ b/third_party/blink/renderer/bindings/core/v8/local_window_proxy.cc
-@@ -44,6 +44,7 @@
- #include "third_party/blink/renderer/core/frame/local_dom_window.h"
- #include "third_party/blink/renderer/core/frame/local_frame.h"
- #include "third_party/blink/renderer/core/frame/local_frame_client.h"
-+#include "third_party/blink/renderer/core/frame/location.h"
- #include "third_party/blink/renderer/core/html/document_name_collection.h"
- #include "third_party/blink/renderer/core/html/html_iframe_element.h"
- #include "third_party/blink/renderer/core/inspector/inspector_task_runner.h"
-@@ -201,6 +202,12 @@ void LocalWindowProxy::Initialize() {
-   if (World().IsMainWorld()) {
-     GetFrame()->Loader().DispatchDidClearWindowObjectInMainWorld();
+ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+     uint32_t length, AllocationFlags flags) {
+   Comment("AllocateSeqOneByteString");
+@@ -3105,6 +3122,9 @@ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+     return CAST(LoadRoot(RootIndex::kempty_string));
    }
+   Node* result = Allocate(SeqOneByteString::SizeFor(length), flags);
++  Node* taint_start = IntPtrAdd(
++      IntPtrConstant(SeqOneByteString::kHeaderSize - kHeapObjectTag),
++      IntPtrConstant(length));
+   DCHECK(RootsTable::IsImmortalImmovable(RootIndex::kOneByteStringMap));
+   StoreMapNoWriteBarrier(result, RootIndex::kOneByteStringMap);
+   StoreObjectFieldNoWriteBarrier(result, SeqOneByteString::kLengthOffset,
+@@ -3113,6 +3133,16 @@ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+   StoreObjectFieldNoWriteBarrier(result, SeqOneByteString::kHashFieldOffset,
+                                  Int32Constant(String::kEmptyHashField),
+                                  MachineRepresentation::kWord32);
 +
-+  UpdateTaintTrackingContextId();
++  IncrementAndStoreTaintInstanceCounter(result);
++  for (int i = 0; i < (int)length; i++) {
++    StoreNoWriteBarrier(
++        MachineRepresentation::kWord8,
++        result,
++        IntPtrAdd(taint_start, IntPtrConstant(i)),
++        Int32Constant(0));
++  }
 +
-+  // log this for the taint tracking instrumentation
-+  const Frame* frame = GetFrame();
-+  v8::TaintTracking::LogInitializeNavigate(V8String(GetIsolate(), frame->IsLocalFrame() && ToLocalFrame(frame)->GetDocument() ? ToLocalFrame(frame)->GetDocument()->baseURI() : KURL()));
+   return CAST(result);
  }
  
- void LocalWindowProxy::CreateContext() {
-@@ -446,6 +453,7 @@ void LocalWindowProxy::UpdateDocument() {
+@@ -3127,6 +3157,9 @@ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+   Comment("AllocateSeqOneByteString");
+   CSA_SLOW_ASSERT(this, IsZeroOrContext(context));
+   VARIABLE(var_result, MachineRepresentation::kTagged);
++  VARIABLE(var_offset, MachineType::PointerRepresentation());
++  Label loop(this, &var_offset), done_loop(this);
++  var_offset.Bind(IntPtrConstant(0));
+ 
+   // Compute the SeqOneByteString size and check if it fits into new space.
+   Label if_lengthiszero(this), if_sizeissmall(this),
+@@ -3134,7 +3167,9 @@ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+   GotoIf(Word32Equal(length, Uint32Constant(0)), &if_lengthiszero);
+ 
+   Node* raw_size = GetArrayAllocationSize(
+-      Signed(ChangeUint32ToWord(length)), UINT8_ELEMENTS, INTPTR_PARAMETERS,
++    // taint needs 2*length
++      Signed(WordShl(ChangeUint32ToWord(length), 1)),
++      UINT8_ELEMENTS, INTPTR_PARAMETERS,
+       SeqOneByteString::kHeaderSize + kObjectAlignmentMask);
+   TNode<WordT> size = WordAnd(raw_size, IntPtrConstant(~kObjectAlignmentMask));
+   Branch(IntPtrLessThanOrEqual(size, IntPtrConstant(kMaxRegularHeapObjectSize)),
+@@ -3152,7 +3187,9 @@ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+     StoreObjectFieldNoWriteBarrier(result, SeqOneByteString::kHashFieldOffset,
+                                    Int32Constant(String::kEmptyHashField),
+                                    MachineRepresentation::kWord32);
++    IncrementAndStoreTaintInstanceCounter(result);
+     var_result.Bind(result);
++
+     Goto(&if_join);
    }
  
-   UpdateDocumentInternal();
-+  UpdateTaintTrackingContextId();
+@@ -3172,6 +3209,30 @@ TNode<String> CodeStubAssembler::AllocateSeqOneByteString(
+   }
+ 
+   BIND(&if_join);
++  {
++    Goto(&loop);
++  }
++
++  BIND(&loop);
++  {
++    Node* taint_start = IntPtrAdd(
++        IntPtrConstant(SeqOneByteString::kHeaderSize - kHeapObjectTag),
++        ChangeInt32ToIntPtr(Signed(length)));
++    Node* result = var_result.value();
++    // clear taint
++    Node* offset = var_offset.value();
++    GotoIf(WordEqual(offset, ChangeUint32ToWord(length)), &done_loop);
++    StoreNoWriteBarrier(
++      MachineRepresentation::kWord8,
++      result,
++      IntPtrAdd(taint_start, offset),
++      Int32Constant(0));
++    var_offset.Bind(IntPtrAdd(offset, IntPtrConstant(1)));
++    Goto(&loop);
++  }
++
++  BIND(&done_loop);
++
+   return CAST(var_result.value());
  }
  
- void LocalWindowProxy::UpdateDocumentInternal() {
-@@ -567,6 +575,20 @@ void LocalWindowProxy::UpdateSecurityOrigin(const SecurityOrigin* origin) {
-   SetSecurityToken(origin);
+@@ -3182,6 +3243,9 @@ TNode<String> CodeStubAssembler::AllocateSeqTwoByteString(
+     return CAST(LoadRoot(RootIndex::kempty_string));
+   }
+   Node* result = Allocate(SeqTwoByteString::SizeFor(length), flags);
++  Node* taint_start = IntPtrAdd(
++      IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag),
++      IntPtrConstant(length * kShortSize));
+   DCHECK(RootsTable::IsImmortalImmovable(RootIndex::kStringMap));
+   StoreMapNoWriteBarrier(result, RootIndex::kStringMap);
+   StoreObjectFieldNoWriteBarrier(result, SeqTwoByteString::kLengthOffset,
+@@ -3190,6 +3254,15 @@ TNode<String> CodeStubAssembler::AllocateSeqTwoByteString(
+   StoreObjectFieldNoWriteBarrier(result, SeqTwoByteString::kHashFieldOffset,
+                                  Int32Constant(String::kEmptyHashField),
+                                  MachineRepresentation::kWord32);
++  IncrementAndStoreTaintInstanceCounter(result);
++  // XXXstroucki size adjust?
++  for (int i = 0; i < (int)length; i++) {
++    StoreNoWriteBarrier(
++        MachineRepresentation::kWord8,
++        result,
++        IntPtrAdd(taint_start, IntPtrConstant(i)),
++        Int32Constant(0));
++  }
+   return CAST(result);
  }
  
-+void LocalWindowProxy::UpdateTaintTrackingContextId() {
-+  // update the taint tracking id for the window
-+  v8::HandleScope scope(GetIsolate());
-+  if (GetFrame() && script_state_) {
-+    if (GetFrame()->IsLocalFrame()) {
-+      script_state_->GetContext()->SetTaintTrackingContextId(
-+        V8String(GetIsolate(), GetFrame()->DomWindow()->location()->toString()));
-+    } else {
-+      script_state_->GetContext()->SetTaintTrackingContextId(
-+        V8String(GetIsolate(), "NON_LOCAL_FRAME"));
+@@ -3198,6 +3271,9 @@ TNode<String> CodeStubAssembler::AllocateSeqTwoByteString(
+   CSA_SLOW_ASSERT(this, IsZeroOrContext(context));
+   Comment("AllocateSeqTwoByteString");
+   VARIABLE(var_result, MachineRepresentation::kTagged);
++  VARIABLE(var_offset, MachineType::PointerRepresentation());
++  Label loop(this, &var_offset), done_loop(this);
++  var_offset.Bind(IntPtrConstant(0));
+ 
+   // Compute the SeqTwoByteString size and check if it fits into new space.
+   Label if_lengthiszero(this), if_sizeissmall(this),
+@@ -3205,7 +3281,9 @@ TNode<String> CodeStubAssembler::AllocateSeqTwoByteString(
+   GotoIf(Word32Equal(length, Uint32Constant(0)), &if_lengthiszero);
+ 
+   Node* raw_size = GetArrayAllocationSize(
+-      Signed(ChangeUint32ToWord(length)), UINT16_ELEMENTS, INTPTR_PARAMETERS,
++      // taint needs total length + 2*length
++      Signed(IntPtrAdd(WordShl(ChangeUint32ToWord(length), 1), ChangeUint32ToWord(length))),
++      UINT8_ELEMENTS, INTPTR_PARAMETERS, // XXXstroucki was uint16, but we need taint space as uint8
+       SeqOneByteString::kHeaderSize + kObjectAlignmentMask);
+   TNode<WordT> size = WordAnd(raw_size, IntPtrConstant(~kObjectAlignmentMask));
+   Branch(IntPtrLessThanOrEqual(size, IntPtrConstant(kMaxRegularHeapObjectSize)),
+@@ -3223,7 +3301,10 @@ TNode<String> CodeStubAssembler::AllocateSeqTwoByteString(
+     StoreObjectFieldNoWriteBarrier(result, SeqTwoByteString::kHashFieldOffset,
+                                    Int32Constant(String::kEmptyHashField),
+                                    MachineRepresentation::kWord32);
++
+     var_result.Bind(result);
++
++    IncrementAndStoreTaintInstanceCounter(result);
+     Goto(&if_join);
+   }
+ 
+@@ -3233,16 +3314,43 @@ TNode<String> CodeStubAssembler::AllocateSeqTwoByteString(
+     Node* result = CallRuntime(Runtime::kAllocateSeqTwoByteString, context,
+                                ChangeUint32ToTagged(length));
+     var_result.Bind(result);
++    IncrementAndStoreTaintInstanceCounter(result);
+     Goto(&if_join);
+   }
+ 
+   BIND(&if_lengthiszero);
+   {
+-    var_result.Bind(LoadRoot(RootIndex::kempty_string));
++    Node* result = LoadRoot(RootIndex::kempty_string);
++    var_result.Bind(result);
++    IncrementAndStoreTaintInstanceCounter(result);
+     Goto(&if_join);
+   }
+ 
+   BIND(&if_join);
++  {
++    Goto(&loop);
++  }
++
++  BIND(&loop);
++  {
++    Node* taint_start = IntPtrAdd(
++      IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag),
++      WordShl(ChangeUint32ToWord(length), 1));
++    Node* result = var_result.value();
++    // clear taint
++    Node* offset = var_offset.value();
++    GotoIf(WordEqual(offset, ChangeUint32ToWord(length)), &done_loop);
++    StoreNoWriteBarrier(
++      MachineRepresentation::kWord8,
++      result,
++      IntPtrAdd(taint_start, offset),
++      Int32Constant(0));
++    var_offset.Bind(IntPtrAdd(offset, IntPtrConstant(1)));
++    Goto(&loop);
++  }
++
++  BIND(&done_loop);
++
+   return CAST(var_result.value());
+ }
+ 
+@@ -5076,6 +5184,7 @@ void CodeStubAssembler::CopyPropertyArrayValues(Node* from_array,
+ }
+ 
+ void CodeStubAssembler::CopyStringCharacters(Node* from_string, Node* to_string,
++                                             TNode<IntPtrT> from_taint,
+                                              TNode<IntPtrT> from_index,
+                                              TNode<IntPtrT> to_index,
+                                              TNode<IntPtrT> character_count,
+@@ -5097,8 +5206,12 @@ void CodeStubAssembler::CopyStringCharacters(Node* from_string, Node* to_string,
+   int header_size = SeqOneByteString::kHeaderSize - kHeapObjectTag;
+   Node* from_offset = ElementOffsetFromIndex(from_index, from_kind,
+                                              INTPTR_PARAMETERS, header_size);
++  TNode<IntPtrT> const to_length = IntPtrSub(to_index, from_index);
+   Node* to_offset =
+       ElementOffsetFromIndex(to_index, to_kind, INTPTR_PARAMETERS, header_size);
++  Node* to_taint = IntPtrAdd(
++      IntPtrConstant(header_size),
++      IntPtrMul(to_length, IntPtrConstant((to_kind == UINT16_ELEMENTS) ? kShortSize : 1)));
+   Node* byte_count =
+       ElementOffsetFromIndex(character_count, from_kind, INTPTR_PARAMETERS);
+   Node* limit_offset = IntPtrAdd(from_offset, byte_count);
+@@ -5112,7 +5225,9 @@ void CodeStubAssembler::CopyStringCharacters(Node* from_string, Node* to_string,
+   int to_increment = 1 << ElementsKindToShiftSize(to_kind);
+ 
+   VARIABLE(current_to_offset, MachineType::PointerRepresentation(), to_offset);
+-  VariableList vars({&current_to_offset}, zone());
++  VARIABLE(current_from_taint, MachineType::PointerRepresentation(), from_taint);
++  VARIABLE(current_to_taint, MachineType::PointerRepresentation(), to_taint);
++  VariableList vars({&current_to_offset, &current_from_taint, &current_to_taint}, zone());
+   int to_index_constant = 0, from_index_constant = 0;
+   bool index_same = (from_encoding == to_encoding) &&
+                     (from_index == to_index ||
+@@ -5120,12 +5235,18 @@ void CodeStubAssembler::CopyStringCharacters(Node* from_string, Node* to_string,
+                       ToInt32Constant(to_index, to_index_constant) &&
+                       from_index_constant == to_index_constant));
+   BuildFastLoop(vars, from_offset, limit_offset,
+-                [this, from_string, to_string, &current_to_offset, to_increment,
++                [this, from_string, from_taint, to_string, to_taint, &current_to_taint, &current_from_taint, &current_to_offset, to_increment,
+                  type, rep, index_same](Node* offset) {
+                   Node* value = Load(type, from_string, offset);
++                  Node* taint = Load(MachineType::Uint8(), from_taint, current_from_taint.value());
+                   StoreNoWriteBarrier(
+                       rep, to_string,
+                       index_same ? offset : current_to_offset.value(), value);
++                  StoreNoWriteBarrier(
++                    MachineRepresentation::kWord8, to_taint,
++                    current_to_taint.value(), taint);
++                  Increment(&current_to_taint, 1);
++                  Increment(&current_from_taint, 1);
+                   if (!index_same) {
+                     Increment(&current_to_offset, to_increment);
+                   }
+@@ -6719,6 +6840,15 @@ TNode<String> CodeStubAssembler::StringFromSingleCharCode(TNode<Int32T> code) {
+       StoreNoWriteBarrier(
+           MachineRepresentation::kWord8, result,
+           IntPtrConstant(SeqOneByteString::kHeaderSize - kHeapObjectTag), code);
++
++      // Init taint
++      StoreNoWriteBarrier(
++        MachineRepresentation::kWord8, result,
++        IntPtrConstant(SeqOneByteString::kHeaderSize -
++                       kHeapObjectTag +
++                       kCharSize),
++        Int32Constant(0));
++
+       StoreFixedArrayElement(cache, code_index, result);
+       var_result.Bind(result);
+       Goto(&if_done);
+@@ -6739,6 +6869,15 @@ TNode<String> CodeStubAssembler::StringFromSingleCharCode(TNode<Int32T> code) {
+     StoreNoWriteBarrier(
+         MachineRepresentation::kWord16, result,
+         IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag), code);
++
++    // Init taint
++    StoreNoWriteBarrier(
++        MachineRepresentation::kWord8, result,
++        IntPtrConstant(SeqTwoByteString::kHeaderSize -
++                       kHeapObjectTag +
++                       kShortSize),
++        Int32Constant(0));
++
+     var_result.Bind(result);
+     Goto(&if_done);
+   }
+@@ -6754,7 +6893,7 @@ TNode<String> CodeStubAssembler::StringFromSingleCharCode(TNode<Int32T> code) {
+ // |from_string| must be a sequential string.
+ // 0 <= |from_index| <= |from_index| + |character_count| < from_string.length.
+ TNode<String> CodeStubAssembler::AllocAndCopyStringCharacters(
+-    Node* from, Node* from_instance_type, TNode<IntPtrT> from_index,
++    Node* from, TNode<IntPtrT> from_taint, Node* from_instance_type, TNode<IntPtrT> from_index,
+     TNode<IntPtrT> character_count) {
+   Label end(this), one_byte_sequential(this), two_byte_sequential(this);
+   TVARIABLE(String, var_result);
+@@ -6767,7 +6906,7 @@ TNode<String> CodeStubAssembler::AllocAndCopyStringCharacters(
+   {
+     TNode<String> result = AllocateSeqOneByteString(
+         NoContextConstant(), Unsigned(TruncateIntPtrToInt32(character_count)));
+-    CopyStringCharacters(from, result, from_index, IntPtrConstant(0),
++    CopyStringCharacters(from, result, from_taint, from_index, IntPtrConstant(0),
+                          character_count, String::ONE_BYTE_ENCODING,
+                          String::ONE_BYTE_ENCODING);
+     var_result = result;
+@@ -6779,7 +6918,7 @@ TNode<String> CodeStubAssembler::AllocAndCopyStringCharacters(
+   {
+     TNode<String> result = AllocateSeqTwoByteString(
+         NoContextConstant(), Unsigned(TruncateIntPtrToInt32(character_count)));
+-    CopyStringCharacters(from, result, from_index, IntPtrConstant(0),
++    CopyStringCharacters(from, result, from_taint, from_index, IntPtrConstant(0),
+                          character_count, String::TWO_BYTE_ENCODING,
+                          String::TWO_BYTE_ENCODING);
+     var_result = result;
+@@ -6793,6 +6932,29 @@ TNode<String> CodeStubAssembler::AllocAndCopyStringCharacters(
+ TNode<String> CodeStubAssembler::SubString(TNode<String> string,
+                                            TNode<IntPtrT> from,
+                                            TNode<IntPtrT> to) {
++
++  Label end(this), runtime(this);
++  TVARIABLE(String, var_result);
++
++  TNode<IntPtrT> const substr_length = IntPtrSub(to, from);
++  TNode<IntPtrT> const string_length = LoadStringLengthAsWord(string);
++
++  // Begin dispatching based on substring length.
++  Label original_string_or_invalid_length(this);
++  GotoIf(UintPtrGreaterThanOrEqual(substr_length, string_length),
++         &original_string_or_invalid_length);
++
++  // A real substring (substr_length < string_length).
++  Label empty(this);
++  GotoIf(IntPtrEqual(substr_length, IntPtrConstant(0)), &empty);
++
++  Label single_char(this);
++  GotoIf(IntPtrEqual(substr_length, IntPtrConstant(1)), &single_char);
++
++// XXXstroucki use the runtime implementation
++  Goto(&runtime);
++// XXXstroucki make sure to handle the from_taint before reenabling this path
++/*
+   TVARIABLE(String, var_result);
+   ToDirectStringAssembler to_direct(state(), string);
+   Label end(this), runtime(this);
+@@ -6801,7 +6963,6 @@ TNode<String> CodeStubAssembler::SubString(TNode<String> string,
+   TNode<IntPtrT> const string_length = LoadStringLengthAsWord(string);
+ 
+   // Begin dispatching based on substring length.
+-
+   Label original_string_or_invalid_length(this);
+   GotoIf(UintPtrGreaterThanOrEqual(substr_length, string_length),
+          &original_string_or_invalid_length);
+@@ -6828,6 +6989,7 @@ TNode<String> CodeStubAssembler::SubString(TNode<String> string,
+       Label next(this);
+ 
+       // Short slice.  Copy instead of slicing.
++      // XXXstroucki default is 13
+       GotoIf(IntPtrLessThan(substr_length,
+                             IntPtrConstant(SlicedString::kMinLength)),
+              &next);
+@@ -6858,13 +7020,13 @@ TNode<String> CodeStubAssembler::SubString(TNode<String> string,
+       }
+ 
+       BIND(&next);
+-    }
++    } // string slices
+ 
+     // The subject string can only be external or sequential string of either
+     // encoding at this point.
+     GotoIf(to_direct.is_external(), &external_string);
+ 
+-    var_result = AllocAndCopyStringCharacters(direct_string, instance_type,
++    var_result = AllocAndCopyStringCharacters(direct_string, direct_taint, instance_type,
+                                               offset, substr_length);
+ 
+     Counters* counters = isolate()->counters();
+@@ -6879,14 +7041,14 @@ TNode<String> CodeStubAssembler::SubString(TNode<String> string,
+     Node* const fake_sequential_string = to_direct.PointerToString(&runtime);
+ 
+     var_result = AllocAndCopyStringCharacters(
+-        fake_sequential_string, instance_type, offset, substr_length);
++        fake_sequential_string, taint, instance_type, offset, substr_length);
+ 
+     Counters* counters = isolate()->counters();
+     IncrementCounter(counters->sub_string_native(), 1);
+-
+     Goto(&end);
+   }
+ 
++*/
+   BIND(&empty);
+   {
+     var_result = EmptyStringConstant();
+@@ -6947,6 +7109,8 @@ ToDirectStringAssembler::ToDirectStringAssembler(
+   var_is_external_.Bind(Int32Constant(0));
+ }
+ 
++// XXXstroucki I guess this thing loops until the string is either
++// external or internal sequential
+ TNode<String> ToDirectStringAssembler::TryToDirect(Label* if_bailout) {
+   VariableList vars({&var_string_, &var_offset_, &var_instance_type_}, zone());
+   Label dispatch(this, vars);
+@@ -7035,7 +7199,7 @@ TNode<String> ToDirectStringAssembler::TryToDirect(Label* if_bailout) {
+ 
+ TNode<RawPtrT> ToDirectStringAssembler::TryToSequential(
+     StringPointerKind ptr_kind, Label* if_bailout) {
+-  CHECK(ptr_kind == PTR_TO_DATA || ptr_kind == PTR_TO_STRING);
++  CHECK(ptr_kind == PTR_TO_DATA || ptr_kind == PTR_TO_STRING || ptr_kind == PTR_TO_TAINT);
+ 
+   TVARIABLE(RawPtrT, var_result);
+   Label out(this), if_issequential(this), if_isexternal(this, Label::kDeferred);
+@@ -7050,10 +7214,24 @@ TNode<RawPtrT> ToDirectStringAssembler::TryToSequential(
+       result = IntPtrAdd(result, IntPtrConstant(SeqOneByteString::kHeaderSize -
+                                                 kHeapObjectTag));
+     }
++    if (ptr_kind == PTR_TO_TAINT) {
++      TNode<IntPtrT> const len = LoadStringLengthAsWord(var_string_.value());
++      result = IntPtrAdd(result, IntPtrConstant(SeqOneByteString::kHeaderSize -
++                                                kHeapObjectTag));
++      Label two_byte_slice(this), seq_end(this);
++      Branch(IsOneByteStringInstanceType(var_instance_type_.value()),
++             &seq_end, &two_byte_slice);
++      BIND(&two_byte_slice);
++      result = IntPtrAdd(result, len);
++      Goto(&seq_end);
++      BIND(&seq_end);
++      result = IntPtrAdd(result, len);
 +    }
-+  }
-+}
-+
- LocalWindowProxy::LocalWindowProxy(v8::Isolate* isolate,
-                                    LocalFrame& frame,
-                                    scoped_refptr<DOMWrapperWorld> world)
+     var_result = ReinterpretCast<RawPtrT>(result);
+     Goto(&out);
+   }
+ 
++  // XXXstroucki in external, the resource has the taint
+   BIND(&if_isexternal);
+   {
+     GotoIf(IsUncachedExternalStringInstanceType(var_instance_type_.value()),
+@@ -7066,6 +7244,9 @@ TNode<RawPtrT> ToDirectStringAssembler::TryToSequential(
+       result = IntPtrSub(result, IntPtrConstant(SeqOneByteString::kHeaderSize -
+                                                 kHeapObjectTag));
+     }
++    if (ptr_kind == PTR_TO_TAINT) {
++      result = LoadObjectField<IntPtrT>(string, ExternalString::kResourceTaintOffset);
++    }
+     var_result = ReinterpretCast<RawPtrT>(result);
+     Goto(&out);
+   }
+@@ -7204,6 +7385,9 @@ TNode<String> CodeStubAssembler::StringAdd(Node* context, TNode<String> left,
+     BIND(&non_cons);
+ 
+     Comment("Full string concatenate");
++// XXXstroucki jump to runtime implementation
++GotoIf(IntPtrEqual(IntPtrConstant(0), IntPtrConstant(0)), &runtime);
++// XXXstroucki fix the from_taint before reenabling this path
+     Node* left_instance_type = LoadInstanceType(var_left.value());
+     Node* right_instance_type = LoadInstanceType(var_right.value());
+     // Compute intersection and difference of instance types.
+@@ -7227,10 +7411,11 @@ TNode<String> CodeStubAssembler::StringAdd(Node* context, TNode<String> left,
+            &two_byte);
+     // One-byte sequential string case
+     result = AllocateSeqOneByteString(context, new_length);
+-    CopyStringCharacters(var_left.value(), result.value(), IntPtrConstant(0),
++    TNode<IntPtrT> var_left_taint = IntPtrConstant(0);
++    CopyStringCharacters(var_left.value(), result.value(), var_left_taint, IntPtrConstant(0),
+                          IntPtrConstant(0), word_left_length,
+                          String::ONE_BYTE_ENCODING, String::ONE_BYTE_ENCODING);
+-    CopyStringCharacters(var_right.value(), result.value(), IntPtrConstant(0),
++    CopyStringCharacters(var_right.value(), result.value(), var_left_taint, IntPtrConstant(0),
+                          word_left_length, word_right_length,
+                          String::ONE_BYTE_ENCODING, String::ONE_BYTE_ENCODING);
+     Goto(&done_native);
+@@ -7239,11 +7424,12 @@ TNode<String> CodeStubAssembler::StringAdd(Node* context, TNode<String> left,
+     {
+       // Two-byte sequential string case
+       result = AllocateSeqTwoByteString(context, new_length);
+-      CopyStringCharacters(var_left.value(), result.value(), IntPtrConstant(0),
++      TNode<IntPtrT> var_left_taint = IntPtrConstant(0);
++      CopyStringCharacters(var_left.value(), result.value(), var_left_taint, IntPtrConstant(0),
+                            IntPtrConstant(0), word_left_length,
+                            String::TWO_BYTE_ENCODING,
+                            String::TWO_BYTE_ENCODING);
+-      CopyStringCharacters(var_right.value(), result.value(), IntPtrConstant(0),
++      CopyStringCharacters(var_right.value(), result.value(), var_left_taint, IntPtrConstant(0),
+                            word_left_length, word_right_length,
+                            String::TWO_BYTE_ENCODING,
+                            String::TWO_BYTE_ENCODING);
+@@ -7317,6 +7503,7 @@ TNode<String> CodeStubAssembler::StringFromSingleCodePoint(
+         MachineRepresentation::kWord32, value,
+         IntPtrConstant(SeqTwoByteString::kHeaderSize - kHeapObjectTag),
+         codepoint);
++// XXXstroucki taint?
+     var_result.Bind(value);
+     Goto(&return_result);
+   }
 ```
 
-#### 5 - ... Pending Stuff
 
-```
- .../renderer/bindings/core/v8/local_window_proxy.h |   2 +
- .../renderer/bindings/core/v8/script_controller.cc |   4 +
- .../renderer/bindings/core/v8/script_controller.h  |   1 +
- .../renderer/bindings/core/v8/v8_code_cache.cc     |   1 +
- third_party/blink/renderer/core/dom/document.cc    |  32 ++-
- third_party/blink/renderer/core/dom/element.cc     |  14 ++
- .../blink/renderer/core/dom/events/event_target.cc |   6 +
- .../blink/renderer/core/dom/events/event_target.h  |   3 +
- .../renderer/core/dom/events/event_target.idl      |   2 +
- third_party/blink/renderer/core/dom/node.cc        |  15 ++
- third_party/blink/renderer/core/dom/node.h         |   2 +
- .../blink/renderer/core/events/message_event.cc    |  11 +
- .../blink/renderer/core/events/message_event.h     |   9 +
- .../blink/renderer/core/events/message_event.idl   |   2 +-
- .../blink/renderer/core/frame/local_frame.h        |   1 +
- third_party/blink/renderer/core/frame/location.cc  |  60 +++++-
- .../core/frame/window_or_worker_global_scope.cc    |  14 ++
- .../renderer/core/html/html_anchor_element.cc      |   4 +
- .../blink/renderer/core/html/html_embed_element.cc |   4 +
- .../renderer/core/html/html_iframe_element.cc      |   1 +
- .../blink/renderer/core/html/html_image_element.cc |   2 +
- .../renderer/core/html/html_script_element.cc      |   7 +
- .../renderer/core/html/parser/atomic_html_token.h  |   1 +
- .../core/html/parser/atomic_html_token_test.cc     |   8 +-
- .../core/html/parser/compact_html_token_test.cc    |   4 +-
- .../core/html/parser/html_entity_parser.cc         |  73 ++++---
- .../renderer/core/html/parser/html_entity_parser.h |  15 +-
- .../blink/renderer/core/html/parser/html_token.h   |  57 +++--
- .../renderer/core/html/parser/html_tokenizer.cc    | 229 ++++++++++++---------
- .../renderer/core/html/parser/html_tokenizer.h     |   6 +-
- .../core/html/parser/input_stream_preprocessor.h   |  11 +
- .../core/html/parser/markup_tokenizer_inlines.h    |   3 +
- .../blink/renderer/core/html/parser/xss_auditor.cc |   2 +-
- third_party/blink/renderer/core/page/frame_tree.cc |   2 +
- .../service_worker/thread_safe_script_container.cc |   4 +-
- .../blink/renderer/modules/storage/storage_area.cc |  11 +-
- .../renderer/platform/bindings/script_state.cc     |  43 ++++
- .../renderer/platform/bindings/script_state.h      |   5 +
- .../renderer/platform/bindings/string_resource.cc  |  33 ++-
- .../renderer/platform/bindings/string_resource.h   |  25 ++-
- .../platform/loader/fetch/cached_metadata.cc       |   2 +
- .../platform/loader/fetch/resource_loader.cc       |   1 +
- .../renderer/platform/text/segmented_string.cc     |   8 +-
- .../renderer/platform/text/segmented_string.h      |  20 +-
- third_party/blink/renderer/platform/wtf/BUILD.gn   |   2 +
- .../renderer/platform/wtf/text/string_impl.cc      |  13 +-
- .../blink/renderer/platform/wtf/text/string_impl.h |   6 +-
- .../renderer/platform/wtf/text/taint_tracking.cc   |  86 ++++++++
- .../renderer/platform/wtf/text/taint_tracking.h    | 100 +++++++++
- tools/v8_context_snapshot/BUILD.gn                 |   7 +
- url/gurl.cc                                        |  11 +
- url/url_canon_etc.cc                               |   1 +
- url/url_canon_internal.cc                          |   3 +
- 66 files changed, 887 insertions(+), 190 deletions(-)
- create mode 100644 third_party/blink/renderer/platform/wtf/text/taint_tracking.cc
- create mode 100644 third_party/blink/renderer/platform/wtf/text/taint_tracking.h
-```
 
 
 -------------------
