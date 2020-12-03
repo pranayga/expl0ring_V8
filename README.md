@@ -33,28 +33,64 @@ application software and system software all at once.
 We trust our Web browser all of our personal data. But where 
 does our trust come from? While it is open source, it is 
 important that some formal verification keeps going into the 
-system<sup>[[1]](#1)</sup>. Google does pretty good job 
-regarding this with their bug bounty system<sup>[[2]](#2)</
-sup>. However, the Chromium's codebase changes a lot all the 
+system<sup>[1]</sup>. Google does pretty good job 
+regarding this with their bug bounty system<sup>[2]</sup>. 
+However, the Chromium's codebase changes a lot all the 
 time and hence it's very important that we keep the bar low 
 enough so that new developers find it easy to get started with 
 Chromium and improve on it's security.
 
-The goal of this study is to make such contributions of a 
-significant component of Chromium, its Javascript engine V8. 
+The goal of this study is to make such contributions to a 
+component of Chromium, its Javascript engine V8. 
 V8 engine is also used in NodeJS, to run javscript code on 
 server side and other standlone application frameworks like 
 electron. This causes security bugs in V8 to have a much 
 larger blast radius when something does go wrong. 
 
+V8 has a steep learning curve for anyone who has little 
+experience working on chromium codebase. While documentation 
+exists for developers, there is little documentation for 
+anyone looking from a security perspective. There has been 
+some notable work by Sergei Glazunov<sup>[9]</sup>, Stephen 
+Röttger<sup>[3]</sup>, Jeremy Fetiveau<sup>[4]</sup>, Samuel 
+Groß<sup>[5]</sup>, and Javier Jimenez<sup>[6][7]</sup>, who 
+all have published blog posts on their findings. There have 
+also been several fuzzing projects<sup>[8]</sup> introduced, 
+with enough documentation so that anyone can use those 
+tools. However, these resources do not give someone who is 
+new to the field enough information to begin their research, 
+and while fuzzing can cover more code in a faster time, it 
+is no replacement for code review and documentation on how 
+the systems internally work.
+
+We will start by exploiring some [background](#background) work which is required to understand the V8 engine better. This will mainly consist of some newer C++11/14 features which chromium codebase makes us of, and a tour of V8. Next, we shall exlopre the internals in a sequential and easy to follow manner, which would give you a tour of the componments inside V8.
 
 ## Background
+
+V8 and Chromium codebase are written using the C++14 standard at the time of writing. V8 exploits a lot of newer C++14 features like `const-expr`, `auto` among others to write code in a very extensible way. Ideas relating to this have been covered in the [C++ Intro](docs/cpp_intro.md) article.
+
+V8 is an Javscript optimizing compiler. It has an inbuilt Interpreter and a optimizing compiler, which can collect type information while Javascript is running and produce more specialized and efficient code. The document [high level tour](docs/high_level_architecture.md) goes over the major components inside V8 to give you a summary of the components inside V8.
 
 ## Internals
 
 // a sub-heading (###) for each major topic in our posts
 
 ## References
-[1]: M. Curphey and D. A. Wheeler, “Improving Trust and Security in Open Source Projects,” p. 27.
+[1] M. Curphey and D. A. Wheeler, “Improving Trust and Security in Open Source Projects,” p. 27.
 
-[2]:
+[2] ‘Chrome Rewards – Application Security – Google’. https://www.google.com/about/appsecurity/chrome-rewards/index.html (accessed Dec. 03, 2020).
+
+
+[3] Ben, ‘Project Zero: Trashing the Flow of Data’, Project Zero, May 10, 2019. https://googleprojectzero.blogspot.com/2019/05/trashing-flow-of-data.html (accessed Aug. 30, 2020).
+
+[4] ‘Diary of a reverse-engineer - Jeremy “__x86” Fetiveau’. https://doar-e.github.io/author/jeremy-__x86-fetiveau.html (accessed Aug. 30, 2020).
+
+[5] Tim, ‘Project Zero: JSC Exploits’, Project Zero, Aug. 29, 2019. https://googleprojectzero.blogspot.com/2019/08/jsc-exploits.html (accessed Aug. 30, 2020).
+
+[6] ‘SensePost | Intro to chrome’s v8 from an exploit development angle’. https://sensepost.com/blog/2020/intro-to-chromes-v8-from-an-exploit-development-angle/ (accessed Aug. 25, 2020).
+
+[7] ‘SensePost | The hunt for chromium issue 1072171’. https://sensepost.com/blog/2020/the-hunt-for-chromium-issue-1072171/ (accessed Aug. 30, 2020).
+
+[8] ‘v8/test/fuzzer’, GitHub. https://github.com/v8/v8/tree/master/test/fuzzer (accessed Aug. 30, 2020).
+
+[9] A Tale of Two Pwnies (Part 1)’, Chromium Blog. https://blog.chromium.org/2012/05/tale-of-two-pwnies-part-1.html (accessed Aug. 30, 2020).
