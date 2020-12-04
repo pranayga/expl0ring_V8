@@ -63,17 +63,72 @@ and while fuzzing can cover more code in a faster time, it
 is no replacement for code review and documentation on how 
 the systems internally work.
 
-We will start by exploiring some [background](#background) work which is required to understand the V8 engine better. This will mainly consist of some newer C++11/14 features which chromium codebase makes us of, and a tour of V8. Next, we shall exlopre the internals in a sequential and easy to follow manner, which would give you a tour of the componments inside V8.
+We will start by exploiring some [background](#background) 
+work which is required to understand the V8 engine better. 
+This will mainly consist of some newer C++11/14 features 
+which chromium codebase makes us of, and a tour of V8. 
+Next, we shall exlopre the internals in a sequential 
+and easy to follow manner, which would give you a tour of 
+the componments inside V8.
 
 ## Background
 
-V8 and Chromium codebase are written using the C++14 standard at the time of writing. V8 exploits a lot of newer C++14 features like `const-expr`, `auto` among others to write code in a very extensible way. Ideas relating to this have been covered in the [C++ Intro](docs/cpp_intro.md) article.
+V8 and Chromium codebase are written using the C++14 standard 
+at the time of writing. V8 exploits a lot of newer C++14 features
+like `const-expr`, `auto` among others to write code in a very 
+extensible way. Ideas relating to this have been covered in the 
+[C++ Intro](docs/cpp_intro.md) article.
 
-V8 is an Javscript optimizing compiler. It has an inbuilt Interpreter and a optimizing compiler, which can collect type information while Javascript is running and produce more specialized and efficient code. The document [high level tour](docs/high_level_architecture.md) goes over the major components inside V8 to give you a summary of the components inside V8.
+V8 is an Javscript optimizing compiler. It has an inbuilt Interpreter 
+and a optimizing compiler, which can collect type information while 
+Javascript is running and produce more specialized and efficient code. 
+The document [high level tour](docs/high_level_architecture.md) goes over 
+the major components inside V8 to give you a summary of the components 
+inside V8.
+
+The remaining of the report is divided into several sections. [Internals](#internals) 
+provides a view of the major components in V8 without any asssumed 
+prior knowledge. Following that, [Experiements](#experiments) discusses 
+various experiments and hands-on activity we performed in order to 
+understand one or more components in greater depth. Lastly, we present 
+a analysis of aversion of V8 which was modified to implement 
+taint-tracking `String` objects. 
 
 ## Internals
 
-// a sub-heading (###) for each major topic in our posts
+In this section we will start looking into various major components
+inside V8 engine.
+
+### V8 Codebase
+In [V8 codebase exploration](docs/V8_code_base.md) article, we go over 
+the location where the codebase for the components we learnt about in the 
+[high level tour](/docs/high_level_architecture.md) are located. Some new
+components like `codegen` and `execution` are also introduced, which act 
+as entinties which makes V9 work together well.
+
+### Turbofan
+
+In [Optimizing Compiler - Turbofan](docs/Turbofan.md) article, we explore the 
+Turbofan - "The optimizing compiler inside V8". This article goes into good depth 
+about how the optimizing compiler inside V8 works and the ideas about 
+`Sea of Nodes`, `Typing` are covered here along since `turbolizer` which is a tool 
+that can be use to analyze Javascript code which is getting optimized by Turbofan.
+
+### Javscript Variables' Representation in V8
+
+In [Javascript Objects in memeory](/docs/JavaScript%20Variables'%20Representation%20in%20Memory.md)
+article, we go over the 
+
+### CSA, Torque & Builtins
+[]
+
+## Experiments
+
+### Embedding V8 - Tracing Controlflow
+
+### Javascript Engine Exploitation Primitive
+
+## Taint - Tracking in V8
 
 ## References
 [1] M. Curphey and D. A. Wheeler, “Improving Trust and Security in Open Source Projects,” p. 27.
