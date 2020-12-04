@@ -117,18 +117,41 @@ that can be use to analyze Javascript code which is getting optimized by Turbofa
 ### Javscript Variables' Representation in V8
 
 In [Javascript Objects in memeory](/docs/JavaScript%20Variables'%20Representation%20in%20Memory.md)
-article, we go over the 
+article, we go over how V8's memory management and object creation 
+backend functions to create Javascript objects. Key ideas like how Javascript functions look like in C++ memory, `Pointer Compression`,
+`Shapes & Hidden Classes`, `inline caches` are discussed here. This 
+information will prove to be helpful in understanding how any basic 
+Javascript object (like `String`) is implemented in the V8 engine.
 
 ### CSA, Torque & Builtins
-[]
+In [Builtins](docs/builtins_basics.md) article, we explore how the 
+ECMAScript standard is implemented in V8 (builtins). Since V8 needs to produced byte
+code, which is platform dependent, a lot of architecture specific tweaks
+are possible to boost performance. Rather than handcrafting builtins for
+each of the many platform, V8 built a higher level assumbler, which 
+allows us to write the builtins in near assembly and the assembles it
+down to architecture optimized version.
 
 ## Experiments
+While in section [Internals](#internals) we read through in great details
+about the major components of V8, nothing really beats some hands - on 
+experience with playing around with the components.
 
 ### Embedding V8 - Tracing Controlflow
+In this two part series, we explore how the idea of Embedding V8 works.
+In the [V8 exploration - I](docs/v8_exploration_I.md), we look at the basics of embedding V8 inside another program. This is the teachnique which is used by `Chromium`, `NodeJS` and others in order to interface
+with V8 invisibly.
+In [V8 exploration - II](docs/v8_exploration_II.md), we try executing a simple line of `Javascript` code and trace it through the V8 codebase. This helps us to get and inituitive understanding of the locations which are hit by the V8 codebase when the functions intresting to us are called. We also discuss how to effectively use GDB while debugging V8.
 
 ### Javascript Engine Exploitation Primitive
+In the [V8 Exploitation Primitives](/docs/JavaScript%20Engine%20Exploitation%20Primitives.md)
+article, we shift gears and talk about the exploitation primitives which 
+have existed in the V8 engine subspace. Here we discuss the primitive 
+that we want to gain through a bug, allowing us to gain different kinds
+of privileges. This is done through exploration of various examples.
 
 ## Taint - Tracking in V8
+<---PANDU--TODO---->
 
 ## References
 [1] M. Curphey and D. A. Wheeler, “Improving Trust and Security in Open Source Projects,” p. 27.
