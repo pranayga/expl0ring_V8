@@ -1,51 +1,35 @@
 # V8 Internals - A Security Nerd's Perspective
 
 ## Abstract
-Open source software if often passively trusted by users & 
+Open-source software if often passively trusted by users & 
 developers. This is especially true for modern web-browsers 
-like Chromium, which touches user's personal data very 
-frequently. However, browsers are hard to secure, inherently 
-complex machines. Most browsers have their own memory 
-management and system software, almost like an operating 
-system. In this study we present internals of the V8 engine, 
+like Chromium, which touches a user's personal data very frequently. However, browsers are hard to secure, inherently complex machines. Most browsers have their own memory management and system software, almost like an operating system. In this study, we present the internals of the V8 engine, 
 which is the JavaScript engine powering the Chromium web-browser. 
-We analyze the major components in depth and then dive into 
+We analyze the major components in-depth and then dive into 
 taint-tracking implementation / previous vulnerabilities in 
-order to explore the current landscape in a systematic way. 
-Our intent is to provide a one stop location to understand the 
+order to explore the current landscape systematically. 
+We intend to provide a one-stop location to understand the 
 core V8 internals, while looking for opportunities for 
 improvement from a security perspective. 
 
 ## Introduction
-The twenty first century can be thought of as a century of 
-open source software. From industrial systems all the way to 
-your microwave, systems might be running a version of an open
-source software. While we use a lost of this software 
-indirectly, web browsers are a unique breed. From an 
-application perspective, they allow us to interact with the 
-world and do anything from sending an email, all the way to 
-stream videos and games via the cloud. On the software end, 
-Chromium does it's own memory management, has a builtin 
-interpreter, and compiler which generates code. Chromium has 
-characteristics of an application software and system software 
-all at once.
+The twenty-first century can be thought of as a century of 
+open-source software. From industrial systems all the way to your microwave, systems might be running a version of open-source software. While we use a lot of this software indirectly, web browsers are a unique breed. From an application perspective, they allow us to interact with the world and do anything from sending an email, all the way to stream videos and games via the cloud. On the software end, 
+Chromium does its own memory management, has a builtin interpreter, and compiler which generates code. Chromium has 
+characteristics of application software and system software all at once.
 
-We trust our web browser with all of our personal data. But where 
-does this trust come from? Since it is open source, it is 
-important that some formal verification goes into the 
-system<sup>[1]</sup>. Google manages this responsibility 
+We trust our web browser with all of our personal data. But where does this trust come from? Since it is open-source, it is 
+important that some formal verification goes into the system<sup>[1]</sup>. Google manages this responsibility 
 via their bug bounty system<sup>[2]</sup> and through various other means. 
 However, Chromium's codebase changes significantly over time,
-hence it is critical that we keep the barrier to entry low enough 
+hence we must keep the barrier to entry low enough 
 so that new researchers find it easy to get started with 
 Chromium and improve on its security.
 
 The goal of this study is to make such contributions to a 
 component of Chromium, specifically its JavaScript engine, V8. 
-The V8 engine is also used in NodeJS, to run JavaScript code on 
-the server side, as well as other standalone application frameworks,
-such as electron. This causes security bugs in V8 to have a much 
-larger blast radius when something does go wrong. 
+The V8 engine is also used in NodeJS, to run JavaScript code on the server-side, as well as other standalone application frameworks,
+such as electron. This causes security bugs in V8 to have a much larger blast radius when something does go wrong. 
 
 V8 has a steep learning curve for anyone who has little 
 experience working on the Chromium codebase. While documentation 
@@ -65,38 +49,26 @@ the systems work internally.
 
 We will start by exploring some [background](#background) 
 work which is required to understand the V8 engine better. 
-This will mainly consist of some newer C++11/14 features 
-which chromium codebase makes us of, and a tour of V8. 
-Next, we shall explore the internals in a sequential 
-and easy to follow manner, which would give you a tour of 
-the components inside V8.
+This will mainly consist of some newer C++11/14 features which chromium codebase makes us of, and a tour of V8. 
+Next, we shall explore the internals in a sequential and easy to follow manner, which would give you a tour of the components inside V8.
 
 ## Background
 
-The V8 and Chromium codebases are written using the C++14 standard 
-at the time of writing. V8 exploits a lot of newer C++14 features
-like `const-expr`, `auto` among others to write code in a very 
-extensible way. Ideas relating to this have been covered in the 
+The V8 and Chromium codebases are written using the C++14 standard at the time of writing. V8 exploits a lot of newer C++14 features
+like `const-expr`, `auto` among others to write code in a very extensible way. Ideas relating to this have been covered in the 
 [C++ Intro](docs/cpp_intro.md) article.
 
-V8 is an JavaScript optimizing compiler. It has an interpreter 
+V8 is a JavaScript optimizing compiler. It has an interpreter 
 and an optimizing compiler, which can collect type information while 
 JavaScript is running and produce more specialized and efficient code. 
-The document [high level tour](docs/high_level_architecture.md) goes over 
-the major components inside V8 to give you a summary of the components 
-inside V8.
+The document [high level tour](docs/high_level_architecture.md) goes over the major components inside V8 to give you a summary of the components inside V8.
 
 The remainder of the report is divided into several sections. [Internals](#internals) 
-provides a view of the major components in V8 without any assumed 
-prior knowledge. Following that, [Experiements](#experiments) discusses 
-various experiments and hands-on activity we performed in order to 
-understand one or more components in greater depth. Lastly, we present 
-a analysis of aversion of V8 which was modified to implement 
-taint-tracking `String` objects. 
+provides a view of the major components in V8 without any assumed prior knowledge. Following that, [Experiements](#experiments) discusses various experiments and hands-on activities we performed to understand one or more components in greater depth. Lastly, we present an analysis of aversion of V8 which was modified to implement taint-tracking `String` objects. 
 
 ## Internals
 
-In this section we will start looking into various major components
+In this section, we will start looking into various major components
 inside the V8 engine.
 
 ### V8 Codebase
@@ -109,16 +81,12 @@ as entities which makes V8 work together well.
 ### Turbofan
 
 In the [Optimizing Compiler - Turbofan](docs/Turbofan.md) article, we explore 
-Turbofan - "The optimizing compiler inside V8". This article goes in depth 
-on how the optimizing compiler works, the `Sea of Nodes`, and `Typing`. It also 
-describes `turbolizer` which is a tool that can be used to analyze Javascript 
-code which is getting optimized by Turbofan, as well as other debugging techniques.
+Turbofan - "The optimizing compiler inside V8". This article goes in depth on how the optimizing compiler works, the `Sea of Nodes`, and `Typing`. It also describes `turbolizer` which is a tool that can be used to analyze Javascript code which is getting optimized by Turbofan, as well as other debugging techniques.
 
 ### JavaScript Variables' Representation in V8
 
 In the [JavaScript Objects in memory](/docs/JavaScript%20Variables'%20Representation%20in%20Memory.md)
-article, we go over how V8's memory management and object creation 
-backend functions to create JavaScript objects. Key ideas, such as how JavaScript functions look like in C++ memory, `Pointer Compression`,
+article, we go over how V8's memory management and object creation backend functions to create JavaScript objects. Key ideas, such as how JavaScript functions look like in C++ memory, `Pointer Compression`,
 `Shapes & Hidden Classes`, `inline caches` are discussed here. This 
 information will prove to be helpful in understanding how any basic 
 JavaScript object (like `String`) is implemented in the V8 engine.
@@ -126,7 +94,7 @@ JavaScript object (like `String`) is implemented in the V8 engine.
 ### CSA, Torque & Builtins
 In the [Builtins](docs/builtins_basics.md) article, we explore how the 
 ECMAScript standard is implemented in V8 (builtins). Since V8 needs to produce 
-bytecode, which is platform dependent, a lot of architecture specific tweaks
+bytecode, which is platform-dependent, a lot of architecture-specific tweaks
 are possible to boost performance. Rather than handcrafting builtins for
 each of the many platforms, V8 built a higher level assembler, which 
 allows us to write the builtins in near assembly and then compiles it
@@ -134,21 +102,19 @@ down to an architecture-optimized version.
 
 ## Experiments
 While in the [Internals](#internals) section we read through great details
-about the major components of V8, nothing really compares to a hands-on 
+about the major components of V8, nothing compares to a hands-on 
 experience playing around with the components.
 
 ### Embedding V8 - Tracing Control Flow
 In this two part series, we explore how the idea of Embedding V8 works.
-In the [V8 exploration - I](docs/v8_exploration_I.md), we look at the basics of embedding V8 inside another program. This is the technique which is used by `Chromium`, `NodeJS` and others in order to interface with V8 invisibly.
+In the [V8 exploration - I](docs/v8_exploration_I.md), we look at the basics of embedding V8 inside another program. This is the technique that is used by `Chromium`, `NodeJS`, and others to interface with V8 invisibly.
 
-In [V8 exploration - II](docs/v8_exploration_II.md), we try executing a simple line of JavaScript code and tracing it through the V8 codebase. This helps us to get and intuitive understanding of the locations which are hit by the V8 codebase when the interesting functions are called. We also discuss how to effectively use GDB while debugging V8.
+In [V8 exploration - II](docs/v8_exploration_II.md), we try executing a simple line of JavaScript code and tracing it through the V8 codebase. This helps us to get an intuitive understanding of the locations which are hit by the V8 codebase when the interesting functions are called. We also discuss how to effectively use GDB while debugging V8.
 
 ### JavaScript Engine Exploitation Primitives
 In the [V8 Exploitation Primitives](/docs/JavaScript%20Engine%20Exploitation%20Primitives.md)
-article, we shift gears and talk about the exploitation primitives which 
-have existed in the V8 engine subspace. Here we discuss the primitives 
-that we want to gain through a bug, allowing us to gain different kinds
-of privileges. This is done through exploration of various examples.
+article, we shift gears and talk about the exploitation primitives which have existed in the V8 engine subspace. Here we discuss the primitives that we want to gain through a bug, allowing us to gain different kinds
+of privileges. This is done through the exploration of various examples.
 
 ## Taint - Tracking in V8
 <---PANDU--TODO---->
@@ -156,7 +122,7 @@ of privileges. This is done through exploration of various examples.
 ## Exploiting a V8 N-Day
 We have 2 articles to explain a V8 bug from 2020; including how it was found, fully understanding it,
 and actually exploiting it. We used this as an opportunity to get some initial exploration
-in exploit writing for V8. This will lead into our final topic from the bug research side. The
+in exploit writing for V8. This will lead to our final topic from the bug research side. The
 [initial look](/docs/Exploring%20Bug%201051017%20in%20V8.md) describes the bug and its fixes and the 
 second article contains the [exploit walkthrough](/docs/Exploiting%20Bug%201051017.md).
 
