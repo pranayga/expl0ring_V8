@@ -1,7 +1,7 @@
 # V8 Internals - A Security Nerd's Perspective
 
 ## Abstract
-Open-source software if often passively trusted by users & 
+Open-source software is often passively trusted by users and 
 developers. This is especially true for modern web-browsers 
 like Chromium, which touches a user's personal data very frequently. However, browsers are hard to secure, inherently complex machines. Most browsers have their own memory management and system software, almost like an operating system. In this study, we present the internals of the V8 engine, 
 which is the JavaScript engine powering the Chromium web-browser. 
