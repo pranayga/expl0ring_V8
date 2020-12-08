@@ -117,7 +117,31 @@ article, we shift gears and talk about the exploitation primitives which have ex
 of privileges. This is done through the exploration of various examples.
 
 ## Taint - Tracking in V8
-<---PANDU--TODO---->
+Browsers touch data originating from a lot of sources. Often webpages have differentiating and unusual 
+characteristics when it comes to how user data touches various components of a webpage. This can be effectively 
+utilized to detect and track certain kinds of behaviors often exhibited during exploitation. However, to achieve 
+this, we need to track the flow of this tainted information. This requires support at the platform level.
+For browsers like chromium, taint tracking can help us detect vulnerabilities like XSS, which was demonstrated by a 
+paper from cylab<sup>[10]</sup>. However, chromium doesn't provide any native taint tracking support. Hence the 
+researchers went and customized the chromium build to support taint tracking. This was not a trivial task. Having a 
+good grasp of the major components inside V8 is required to make the numerous changes required to incorporate such 
+functionality into V8.
+
+Thus in the following posts, we shall look into the efforts which were made and explore the actual source code 
+modification which allows taint tracking, with a special emphasis on V8-based modifications.
+
+### Tweaking / Adding a new Object type to V8 - (In works)
+Before we start propagating any kind of taint data, we need to figure out how to store that taint data. Taint data can be maintained at different granularity levels.  In the article [taints in V8](docs/tweaking_v8_objects.md), we explore one possible way of modifying the base String class to incorporate taint data.
+
+### Propagating Taints in V8  - (In works) 
+Once we have the idea of a changed String class, the next step would be to accommodate the actual taint propagation inside V8 during the interaction between different string objects. In the post [ passing the taint](docs/taint_tracking_stroucki.md), we explore how taints initially get introduced from blink and then look at the builtins which are responsible for propagating the taint as different objects interact.
+
+Once we have some idea of the locations where taint is propagated, next would be to look at how exactly taint propagation functions. This is where `taint_tacking` library which was custom built for the very task comes in. the post [dipping the brush](docs/taint_tracking_stroucki_II.md), discusses the codebase which is actually responsible for the taint management. This is the library that is triggered by the builtins, each time we need to propagate any taint data.
+
+This is total completes a high-level overview of the code inside V8, which manages and propagates our taint data.
+
+### Propogating Taint in Blink & though V8 - (In works) 
+Once we have a working taint propagation system in V8, the next point of attack would be to actually generate the initial points of taint and mark the sinks. In the post [tainted waterfall](docs/taint_tracking_stroucki_III.md), we discuss how we configure blink to mark the taint sources and sinks alongside enable taint propagation defined in the blink specific functions.
 
 ## Exploiting a V8 N-Day
 We have 2 articles to explain a V8 bug from 2020; including how it was found, fully understanding it,
@@ -145,3 +169,5 @@ second article contains the [exploit walkthrough](/docs/Exploiting%20Bug%2010510
 [8] ‘v8/test/fuzzer’, GitHub. https://github.com/v8/v8/tree/master/test/fuzzer (accessed Aug. 30, 2020).
 
 [9] A Tale of Two Pwnies (Part 1)’, Chromium Blog. https://blog.chromium.org/2012/05/tale-of-two-pwnies-part-1.html (accessed Aug. 30, 2020).
+
+[10] L. Bauer, S. Cai, and L. Jia ‘Run-time Monitoring and Formal Analysis of Information Flows in Chromium – NDSS Symposium’. https://www.ndss-symposium.org/ndss2015/ndss-2015-programme/run-time-monitoring-and-formal-analysis-information-flows-chromium/ (accessed Dec. 07, 2020).
