@@ -127,8 +127,9 @@ researchers went and customized the chromium build to support taint tracking. Th
 good grasp of the major components inside V8 is required to make the numerous changes required to incorporate such 
 functionality into V8.
 
-Thus in the following posts, we shall look into the efforts which were made and explore the actual source code 
-modification which allows taint tracking, with a special emphasis on V8-based modifications.
+Thus in the following posts, we shall look into the efforts which were made and explore the actual 
+[source code](https://cement.andrew.cmu.edu/stroucki/chromium-taint-tracking) modification which allows 
+taint tracking, with a special emphasis on V8-based modifications.
 
 ### Tweaking / Adding a new Object type to V8 - (In works)
 Before we start propagating any kind of taint data, we need to figure out how to store that taint data. Taint data can be maintained at different granularity levels.  In the article [taints in V8](docs/tweaking_v8_objects.md), we explore one possible way of modifying the base String class to incorporate taint data.
