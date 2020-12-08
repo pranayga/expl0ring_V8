@@ -2,50 +2,50 @@
 
 ## Introduction & Rational
 
-Imagine you were implementing the V8 engine. Your main target is to be able to run the ECMAScript specification for Javascript. This requires read through the [comprehensive specification](https://github.com/tc39/proposals) and implement the required behaviour.
+Imagine you were implementing the V8 engine. Your main target is to be able to run the ECMAScript specification for Javascript. This requires reading through the [comprehensive specification](https://github.com/tc39/proposals) and implement the required behavior.
 
-V8's optimizing compiler [Turbofan]() uses a combination of techniques in order to make long running code faster with help of  type information and optimizations. However, you would still require a good baseline performance for all the functions that ECMAScript defines. A bultin function from ECMAScript's prespective is a function from the ECMAScript spec's library.
+V8's optimizing compiler [Turbofan]() uses a combination of techniques to make long-running code faster with help of type information and optimizations. However, you would still require a good baseline performance for all the functions that ECMAScript defines. A builtin function from ECMAScript's perspective is a function from the ECMAScript spec's library.
 
-You would want these functions to be fast, and historically many were written in assembly to ensure that they were fast, efficient (which they had to since user code basically built ontop of these primitive functionalities). The assembly had various special tweaks to it in order to utilize the platform's instruction set better. Initially V8 was supportted on only on one platform, with time that grew to a [large number](). As you would imagine, with the volatile nature of ECMAScript & complex design for V8, writing assembly based builtins for multiple platforms and keeping them updated isn't a trivial task. 
+You would want these functions to be fast, and historically many were written in assembly to ensure that they were fast, efficient (which they had to since user code was built on top of these primitive functionalities). The assembly had various special tweaks to it to utilize the platform's instruction set better. Initially, V8 was supported only on one platform, with the time that grew to a [large number](). As you would imagine, with the volatile nature of ECMAScript & complex design for V8, writing assembly based builtins for multiple platforms and keeping them updated isn't a trivial task. 
 
-V8 team was soon looking for a abstraction / system which let's them write the bultins once and use then use them across the platforms, while retaining the architecture specific optimizations.
+V8 team was soon looking for an abstraction/system which lets them write the builtins once and use then use them across the platforms while retaining the architecture-specific optimizations.
 
 
 ### Fits like an old sock
 
-Okay Pandu, fine I get what builtins are. But I still quite don't get how it really fits into the bigger picture of the assets that V8 produces, codebase and the controlflow. Could you maybe, go a little deeper from the codeflow prespective? 
+Okay Pandu, fine I get what builtins are. But I still quite don't get how it really fits into the bigger picture of the assets that V8 produces, codebase, and the control-flow. Could you maybe, go a little deeper from the code flow perspective? 
 
 ![](https://i.imgur.com/WayerLo.gif)
 
-[Embedded Builtins](https://v8.dev/blog/embedded-builtins) provides some great context on the entire rational behind builtins.  Below is key parts based on my understanding of the document:
-- The idea of builtins is similar to the way we have DLLs and .so files in Windows & UNIX respectively. The idea is to share JS code accross V8 Isolates. Imagine having the entire codebase which implements the ECMAScript standard over and over again for each instance of V8 Isolate. Not very efficient.
+[Embedded Builtins](https://v8.dev/blog/embedded-builtins) provides some great context on the entire rationale behind builtins.  Below is key parts based on my understanding of the document:
+- The idea of builtins is similar to the way we have DLLs and .so files in Windows & UNIX respectively. The idea is to share JS code across V8 Isolates. Imagine having the entire codebase which implements the ECMAScript standard over and over again for each instance of V8 Isolate. Not very efficient.
 - This was historically hard to implement because:
 
-> Generated builtin code was neither isolate- nor process-independent due to embedded pointers to isolate- and process-specific data. V8 had no concept of executing generated code located outside the managed heap.
+> Generated builtin code was neither isolated- nor process-independent due to embedded pointers to isolate- and process-specific data. V8 had no concept of executing generated code located outside the managed heap.
 
-If you're intrested on why and how bultins & snapshots function, highly recommend reading [Embedded Builtins](https://v8.dev/blog/embedded-builtins).
+If you're interested in why and how builtins & snapshots function, highly recommend reading [Embedded Builtins](https://v8.dev/blog/embedded-builtins).
 
 ## Enter CodeStubAssembler
 
-We know that V8's Turbofan uses an internal IR for low-level machine operations. The Turbofan backend already knows how to optimize these operations according to the traits of the target platform. What if we could use the Turbofan to directly generate the platform specific builtin code! CSA was built to do just that.
+We know that V8's Turbofan uses an internal IR for low-level machine operations. The Turbofan backend already knows how to optimize these operations according to the traits of the target platform. What if we could use the Turbofan to directly generate the platform-specific builtin code! CSA was built to do just that.
 > Dubbed the CodeStubAssembler or CSA—that defines a portable assembly language built on top of TurboFan’s backend. The CSA adds an API to generate TurboFan machine-level IR directly without having to write and parse JavaScript or apply TurboFan’s JavaScript-specific optimizations - V8 Team
 
 ![](https://i.imgur.com/IiHyJAe.png)
 
-As you can see in the image above, this bath can only be currenly used by bultins and some additional [Ignition]() based handlers which are created and managed by V8. The normal JS code still hits the Javascript frontend. 
+As you can see in the image above, this bath can only be currently used by builtins and some additional [Ignition]() based handlers which are created and managed by V8. The normal JS code still hits the Javascript frontend. 
 
-CSA contains code to generate IR for low level operations like "load this object pointer from a given addr" and "mask this bit from this address", which allows the developer to write the builtins in near to assembly level glanularity, while remaining platform independent.
+CSA contains code to generate IR for low-level operations like "load this object pointer from a given address" and "mask this bit from this address", which allows the developer to write the builtins in near to assembly level granularity while remaining platform-independent.
 
 ### Test Triving CSA
 
-Well that's goodlooking and everything, but let's have a deeper hands on look at the CSA.
+Well, that's good looking and everything, but let's have a deeper hands-on look at the CSA.
 
 #### Example 1
-Now let's do through the example from [CSA Embedding Post](https://v8.dev/docs/csa-builtins)from V8 Blog. 
+Now let's go through the example from [CSA Embedding Post](https://v8.dev/docs/csa-builtins)from V8 Blog. 
 
 ##### Task 1: Declare the builtin
 
-For the builtin to be picked by the `mksnapshot.exe`, we first need to declare it in the `src/builtins/builtins-definitions.h`. Here, you can have [multiple kinds](https://chromium.googlesource.com/external/github.com/v8/v8.wiki/+/30daab8a92562c331c93470f54877fa02b9422b5/CodeStubAssembler-Builtins.md) of builtins, each with specific usecases in mind, which are not at all apperent at first. Below are few starting points for each:
+For the builtin to be picked by the `mksnapshot.exe`, we first need to declare it in the `src/builtins/builtins-definitions.h`. Here, you can have [multiple kinds](https://chromium.googlesource.com/external/github.com/v8/v8.wiki/+/30daab8a92562c331c93470f54877fa02b9422b5/CodeStubAssembler-Builtins.md) of builtins, each with specific use-cases in mind, which are not at all apparent at first. Below are a few starting points for each:
 - `CPP`: Builtin in C++. Entered via BUILTIN_EXIT frame.
     - [starCTF's OOB V8](https://web.archive.org/web/20200907163615/https://faraz.faith/2019-12-13-starctf-oob-v8-indepth/) problem made use of it, to introduce a builtins to make an off by one, out of bounds access.
 - `TFJ`: Builtin in Turbofan, with JS linkage (callable as Javascript function)
@@ -173,10 +173,10 @@ Now let's do through the example from [CSA Introduction Post](https://v8.dev/blo
 
 ## A little more snug: Torque
 
-CSA is great! Provides us all the low level optimizations we want from builtins, while keeping arhitecture specific nitti-gritties away from us. However, looking at the CSA example we say ealier, it's very similar to assembly itself (with GOTOs). Secondly, we need to manually do a lot of checks for the node types, resulting in still more code. Looks like a place for some more abstraction. This is where torque comes in.
+CSA is great! Provides us all the low-level optimizations we want from builtins while keeping architecture-specific nitti-gritties away from us. However, looking at the CSA example we say earlier, it's very similar to the assembly itself (with GOTOs). Secondly, we need to manually do a lot of checks for the node types, resulting in still more code. Looks like a place for some more abstraction. This is where torque comes in.
 > V8 Torque: is a V8-specific domain-specific language that is translated to CodeStubAssembler. As such, it extends upon CodeStubAssembler and offers static typing as well as readable and expressive syntax.
 
-Torque thus basically is a wrapper over CSA, which makes things easier (somewhat) for V8 dev writing the builtins. It's most useful when you're using other exisiting CSA/ASM builtins to do somthing more powerful.
+Torque thus basically is a wrapper over CSA, which makes things easier (somewhat) for V8 dev writing the builtins. It's most useful when you're using other existing CSA/ASM builtins to do something more powerful.
 
 ![](https://i.imgur.com/jgO8e0O.png)
 

@@ -1,10 +1,10 @@
 # Exploring V8 Engine - II (Control Flow & Memory Structures)
 
-##### In this post, we will start our exploration of V8 engine and look under the hood at call sequences that are made in order to execute a simple `'hello' + 'world'` command. This post is a follow up to our [Exploring V8 Engine - I](/docs/v8_exploration_I.md) post.
+##### In this post, we will start our exploration of V8 engine and look under the hood at call sequences that are made to execute a simple `'hello' + 'world'` command. This post is a follow up to our [Exploring V8 Engine - I](/docs/v8_exploration_I.md) post.
 
 ## Setting up release.sample build (monolithic with debug)
 
-In order to testout the V8 embedding, you need a compile your sample hello-world.cc file with the V8 source code. Doing this for each sample would be tedious. V8 provide you way to build the V8 source as a standlone binary which we can directly use while building any samples which embed V8. This makes sure that you don't have to recompile the V8 source each time you make a small change to your sample.
+To test out the V8 embedding, you need a compile your sample hello-world.cc file with the V8 source code. Doing this for each sample would be tedious. V8 provides you a way to build the V8 source as a standalone binary which we can directly use while building any samples which embed V8. This makes sure that you don't have to recompile the V8 source each time you make a small change to your sample.
 
 The [embedding V8](https://v8.dev/docs/embed) takes you through the process effortlessly. However, the `x64.release.sample` they build do not have debug symbols enabled (which we want). So, below is a slightly tweaked version of the `gn args out.gn/x64.release.sample` which includes all the extra debugging symbols we will require.
 
@@ -39,7 +39,7 @@ Hello, World!
   ![](https://i.imgur.com/lMeJjsO.png)
 * Configure your `GDB` to pickup the `tools/gdbinit` file
 
-Now lets move on and hook up our good old friend `GDB` and see what's what.
+Now let's move on and hook up our good old friend `GDB` and see what's what.
 
 ### Setting up GDB with GEF
 
@@ -94,17 +94,17 @@ The first just prepares the provided command into a `utf-8` encoded javascript t
 
 ![](https://i.imgur.com/SMLk6OW.png)
 
-This includes the flow hitting [interpreter.cc](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/interpreter/interpreter.cc) and getting interpret. One good way is to use `(gdb) rbreak filename.xx:.` to break on all the functions of the file. This is what the back trace looks like at that instance of time:
+This includes the flow hitting [interpreter.cc](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/interpreter/interpreter.cc) and getting interpret. One good way is to use `(gdb) rbreak filename.xx:.` to break on all the functions of the file. This is what the backtrace looks like at that instance of time:
 
 ![](https://i.imgur.com/RFf7pZ7.png)
 
 #### Running
 
-Now that we have the code compiled and the env mostly setup, the only left out piece in the puzzel is, how does the code actually execute?
+Now that we have the code compiled and the env mostly setup, the only left out piece in the puzzle is, how does the code execute?
 
 We see the run invocation on line 47. This line invokes
 [v8::Script::Run](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/api/api.cc;l=2146;drc=3499b8567ac2e8e6ac46c717df495e5ed91b3fc6)
-which is reponsible for handling the execution of the code in the provided context.
+which is responsible for handling the execution of the code in the provided context.
 
 ![](https://i.imgur.com/LqmYdg9.png)
 
@@ -112,13 +112,13 @@ From the `v8::Script::Run`,
 [Execution::Call](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/execution/execution.cc;l=459;drc=2e96276c762073eb1e4de8a95bb944bd764f75fb)
 is invoked which is responsible for setting up the remaining structures required to execute the interpret code and get back the result.
 [Execution::Invoke](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/execution/execution.cc;l=241;drc=8d739b8c2d6b98b5c77b1852923ab2ae1b9fdabf)
-is eventually invoked which converts the interpret intermediate bytecode into the platform specific object code using
+is eventually invoked which converts the interpret intermediate bytecode into the platform-specific object code using
 [GenerateCode](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/execution/simulator.h;l=152;drc=8d739b8c2d6b98b5c77b1852923ab2ae1b9fdabf;bpv=0;bpt=1)
 and triggers the invocation of the code.
-Providing us the data in the stuctures we require.
+Providing us the data in the structures we require.
 
 ### Reflecting on this article
 
-The main target of this post was to explore what main files and functions are touched during the compilation and execution of a simple example. More discussion on what code sections go what are described in [this](https://m4dst4cks.github.io/blog/2020/09/18/V8-Exploitation-Series-Part-3) post.
+The main target of this post was to explore what main files and functions are touched during the compilation and execution of a simple example. More discussion on what code sections go what is described in [this](https://m4dst4cks.github.io/blog/2020/09/18/V8-Exploitation-Series-Part-3) post.
 
-The main idea to learn is, while tracing have an idea of what file the control might hit and then use `(gdb) rbreak filename:.` or a similar eq to trace on a higher level rather than tracing the control flow line by line.
+The main idea to learn is while tracing have an idea of what file the control might hit and then use `(gdb) rbreak filename:.` or a similar eq to trace on a higher level rather than tracing the control flow line by line.

@@ -4,17 +4,17 @@
 
 ## Introduction
 
-C++ powers most of the V8 engine. All the memory memory management logic, Ignition Interpreter, Turbofan (Optimizing compiler) are written in C++. Thus, it's very much required for anyone beginning with V8 exploitation to brush up their C++ skills enough to understand V8's source code. 
+C++ powers most of the V8 engine. All the memory management logic, Ignition Interpreter, Turbofan (Optimizing compiler) are written in C++. Thus, it's very much required for anyone beginning with V8 exploitation to brush up their C++ skills enough to understand V8's source code. 
 
-While a lot of us have run into C++ at somepoint in our lives, if it wasn't in a recent production code (which isn't older than you are) there's a great chance you never ran into the new, expansive and a little different world of new features from `C++11/14`. At time of writing (3rd Sept, 2020), Chromium's most codebase is based in `C++11/14` and being actively migrated for `C++17` with a [target for 2021](https://chromium-cpp.appspot.com/). While there's a lot of change, the changes from C++11/14 and onwards are pretty incremental. However, there's quite a leap in new things from `C++98` to `C++11/14` as we'll see.
+While a lot of us have run into C++ at some point in our lives, if it wasn't in a recent production code (which isn't older than you are) there's a great chance you never ran into the new, expansive, and a little different world of new features from `C++11/14`. At the time of writing (3rd Sept, 2020), Chromium's most codebase is based in `C++11/14` and being actively migrated for `C++17` with a [target for 2021](https://chromium-cpp.appspot.com/). While there's a lot of change, the changes from C++11/14 and onwards are pretty incremental. However, there's quite a leap in new things from `C++98` to `C++11/14` as we'll see.
 
 Wait, I don't need to read no `C++11/14`. I know C++:
 * Templates
-* Multiple Inheritences
+* Multiple Inheritance
 * Namespaces
 * .... another 10K stuff
  
-I know that as back of my hand. I mean,
+I know that as the back of my hand. I mean,
 
 ![](https://thumbs.gfycat.com/TerrificImpureHarrier-size_restricted.gif)
 
@@ -51,7 +51,7 @@ class TaggedImpl {
   }
 // yada yada yada.....
 ```
-In few words, below are the things I don't quite understand:
+In a few words, below are the things I don't quite understand:
 * Line 1: `HeapObjectReferenceType kRefType` what's with the fixed looking `enum` getting passed into the template.
 * Line 4: `static_assert`, well that's something I've never seen before. I won't what that does.
 * Line 12: `constexpr TaggedImpl() : ptr_{} {}`, what's this weird constructor which is initialized with curly braces? What is this `_ptr` thing?
@@ -61,14 +61,14 @@ Me by this point,
 
 ![](https://media1.tenor.com/images/634d6dae7a9d4eb56a108469a05f831d/tenor.gif?itemid=8139976)
 
-I guess we need to go do some brushup on our C++ Skills. Upon more re-search, most of it turned out to be pretty simple C++11 stuff. We'll be discussing a little more things than what's required to answer the questions above.
+I guess we need to go do some brushup on our C++ Skills. Upon more research, most of it turned out to be pretty simple C++11 stuff. We'll be discussing a little more things than what's required to answer the questions above.
 
-If you're a smarty pants (@mckade) and already know what's going in these lines, feel free to skim, skip over and move to the next article. For the rest of us, let's get going. Here's a link you might want to [skim through](https://blog.petrzemek.net/2014/12/07/improving-cpp98-code-with-cpp11/) just to sanity check.
+If you're a smarty pant (@mckade) and already know what's going in these lines, feel free to skim, skip over and move to the next article. For the rest of us, let's get going. Here's a link you might want to [skim through](https://blog.petrzemek.net/2014/12/07/improving-cpp98-code-with-cpp11/) just to sanity check.
 
 
 ## Understanding the new parts of C++11/14
 
-I refered articles and videos from all over the internet which I will link. 
+I referred to articles and videos from all over the internet which I will link. 
 
 Before I start, below are three recomendations (in order):
 
@@ -77,19 +77,19 @@ Before I start, below are three recomendations (in order):
 * (Optional) | A lot of people told me to read [Effective Modern C++](amazon.com/Effective-Modern-Specific-Ways-Improve/dp/1491903996), while finally proved very helpful here. I recommend everyone to read up on Chapters 1,2,3 & 5. 
 * (Optional) | [The C++ Programming Language, Fourth Edition](https://learning.oreilly.com/library/view/the-c-programming/9780133522884/ch23.html#ch23) - Chapter 23
 
-I highly recommend reading the first two readings before moving ahead. Now let's take a look at few new features and then we'll circle back to the things we initially didn't understand well.
+I highly recommend reading the first two readings before moving ahead. Now let's take a look at a few new features and then we'll circle back to the things we initially didn't understand well.
 
 ### Rvalues-Lvalues, Rvalue References & Perfect Forwarding
 
-Rvalues Lvalues have secretly existed since long in C++. While the definition of Rvalues and Lvalues is a little trickly, you can identify them as:
+Rvalues Lvalues have secretly existed for a long in C++. While the definition of Rvalues and Lvalues is a little tricky, you can identify them as:
 * **Rvalues**: Objects that usually have named aliases and live in memory.
-* **Lvalues**: Temporary objects usually created for computation, assignment or return (usually unamed).
+* **Lvalues**: Temporary objects usually created for computation, assignment, or return (usually unnamed).
 
 I agree that there are a ton of usually(s) here, but these are dependent on multiple things and is determined during compile time. To add to that, this can be cased with operators like `std::move` etc. So when in doubt, ask the compiler. 
 
-I went ahead and expiremented different kinds of move scemantics. However, they are not strictly related to V8 and more of a general concept. If you're interested, checkout my experiments on [Move constructors and assignment operators](https://github.com/pranayga/expl0ring_V8/tree/master/Cpp/rvalue_references).
+I went ahead and experimented with different kinds of move semantics. However, they are not strictly related to V8 and more of a general concept. If you're interested, check out my experiments on [Move constructors and assignment operators](https://github.com/pranayga/expl0ring_V8/tree/master/Cpp/rvalue_references).
 
-As far as knowledge for C++'s usage of these constructs is concerened, I recommend viewing these links (in order):
+As far as knowledge for C++'s usage of these constructs is concerned, I recommend viewing these links (in order):
 
 * The Cherno -> Channel with a great C++ playlist.
   * [lvalues and rvalues in C++](https://www.youtube.com/watch?v=fbYknr-HPYE) 
@@ -99,8 +99,8 @@ As far as knowledge for C++'s usage of these constructs is concerened, I recomme
 * (Optional) | [An Effective C++11/14 Sampler](h)ttps://channel9.msdn.com/Events/GoingNative/2013/An-Effective-Cpp11-14-Sampler) - Scott Meyers
 * (Optional) | [Perfect Forwarding](https://eli.thegreenplace.net/2014/perfect-forwarding-and-universal-references-in-c) --> It's one of the festures which are used less. TODO: Explore how it's used in V8
 
-### Constructor{}, initilization lists
-Initilization Lists are another intresting thing which were introduced in C++11. The initializer lists are used to directly initialize data members of a class (inline of the document). Example:
+### Constructor{}, initialization lists
+Initialization Lists are another interesting thing that was introduced in C++11. The initializer lists are used to directly initialize data members of a class (inline of the document). Example:
 ```C++
 // Try Running on ccp.sh
 #include <iostream>
@@ -139,7 +139,7 @@ List::List (int len){
 More details are available at [Initialization Lists Intro](https://en.cppreference.com/w/cpp/language/constructor).
 
 ## Second Look at TaggedImpl
-Let's repaste the code down here and do over it together.
+Let's repaste the code down here and do it together.
 ```C++=
 template <HeapObjectReferenceType kRefType, typename StorageType>
 class TaggedImpl {
@@ -177,7 +177,7 @@ class TaggedImpl {
 * Line 23: `static_cast<>`, what's this weird cast?
 > Finally, we have a static_cast, which can be used to change the interpretation of an object during compilation. More [here](https://en.cppreference.com/w/cpp/language/static_cast).
 
-Finally towards the [end of the class definition](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/objects/tagged-impl.h;l=183;drc=09fd7c717c08af5aaf2df1e0fe732cbe0bb87f11), we have:
+Finally, towards the [end of the class definition](https://source.chromium.org/chromium/chromium/src/+/master:v8/src/objects/tagged-impl.h;l=183;drc=09fd7c717c08af5aaf2df1e0fe732cbe0bb87f11), we have:
 ```C++=183
 StorageType ptr_;
 ```
@@ -189,9 +189,9 @@ And it finally Makes sense!
 
 Looking back, now you'd be like Hmmm...
 
-That was so obvious and easy. I agree! We didn't need to read 90% of the links in order to make sense of our initial function. However these articles gives us a wholistic understanding of the features and places to refer back to! 
+That was so obvious and easy. I agree! We didn't need to read 90% of the links in order to make sense of our initial function. However, these articles give us a holistic understanding of the features and places to refer back to! 
 
-Initially nothing made sense but after reading a few articles things fit in!
+Initially, nothing made sense but after reading a few articles things fit in!
 
 ## Where to next?
 
@@ -201,10 +201,10 @@ Once you're good with the basics of `C++11/14`, I would recommend the following 
 * (TODO, out of scope)[Smart Pointers guide](https://www.chromium.org/developers/smart-pointer-guidelines)
 * (TODO, out of scope)[Important Abstractions](https://www.chromium.org/developers/coding-style/important-abstractions-and-data-structures) 
 
-## More References (In no particular Order)
+## More References (In no Particular Order)
 
 * [Pointers VS References](https://www3.ntu.edu.sg/home/ehchua/programming/cpp/cp4_PointerReference.html) -> Use this as a refresher for how references differ from pointers, what's legal and what's not. Also, mentions how const functions can accept non-const variables, but not the other way around.
 * Rvalues & Lvalues
   * [Chromium's R-values Starter](https://www.chromium.org/rvalue-references)
-  * [Lvalues & Rvalues](https://www.internalpointers.com/post/understanding-meaning-lvalues-and-rvalues-c) -> Reading this would tell you about the lvalues (things that exist in memory) and rvalues (which don't exist in memory). It also explains how operators at compiler level relate to R&Lvalues (along with example error messages).
+  * [Lvalues & Rvalues](https://www.internalpointers.com/post/understanding-meaning-lvalues-and-rvalues-c) -> Reading this would tell you about the lvalues (things that exist in memory) and rvalues (which don't exist in memory). It also explains how operators at the compiler level relate to R&Lvalues (along with example error messages).
   * [Inderstanding Rvalue References](http://thbecker.net/articles/rvalue_references/section_01.html)
