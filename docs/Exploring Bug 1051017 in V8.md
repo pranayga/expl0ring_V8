@@ -1,4 +1,6 @@
-# Introduction
+# Exploring Bug 1051017 in V8
+
+## Introduction
 
 I've been following typer bugs for about a year now. There is a lot that goes into understanding V8, and even the small subsection of vulnerabilities known as type-confusion bugs. Within type-confusion bugs I have personally split them into two even smaller subsets: array type confusion and range type confusion. In this post I will be focusing on the range type confusion class. Some other notable bugs in this class are [762874](https://bugs.chromium.org/p/chromium/issues/detail?id=762874), [880207](https://bugs.chromium.org/p/chromium/issues/detail?id=880207), and [906043](https://bugs.chromium.org/p/chromium/issues/detail?id=906043) (these are bugs that I have seen exploits associated with, there have been plenty more in the typer). These are all well documented, and I included links to some good writeups at the end of this post.
 
@@ -6,7 +8,7 @@ I'm writing this post because there have been great studies into these exploits 
 
 There are 5 separate patches associated with this bug, and I hope to explain most of them in detail, so let's dive in!
 
-# First PoC
+## First PoC
 
 The report is now open to the public ([here](https://bugs.chromium.org/p/chromium/issues/detail?id=1051017)).
 
@@ -80,7 +82,7 @@ console.log(trigger()[0][11]);
 
 You can follow along by checking out commit 73f88b5f69077ef33169361f884f31872a6d56ac (just before the first patch) and running this code. In order to understand the PoC we need to see what values we should get, what assumptions the compiler makes, and what values we get from the optimized code. We can find the answers using Turbolizer.
 
-## Turbolizer
+### Turbolizer
 
 ![Turbolizer PoC](https://raw.githubusercontent.com/m4dSt4cks/m4dst4cks.github.io/master/public/img/1051017_poc_max.PNG)
 
@@ -115,7 +117,7 @@ This makes more sense, V8 uses the actual value at runtime to calculate the leng
 
 _Side note: An array's backing store is the place in memory where its actual elements are stored._
 
-# Patching the ReduceJSCreateArray Bypass [link](https://github.com/v8/v8/commit/6516b1ccbe6f549d2aa2fe24510f73eb3a33b41a)
+## Patching the ReduceJSCreateArray Bypass [link](https://github.com/v8/v8/commit/6516b1ccbe6f549d2aa2fe24510f73eb3a33b41a)
 
 This was the first patch chronologically. It's a 1 line patch that simply changes the value of some `length` variable to be the same as the `capacity` variable. To understand what this means, we need to look at the function definition `Reduction JSCreateLowering::ReduceJSCreateArray(Node* node)`. The name tells us that this is some kind of lowering of a JSCreateArray node. Walking the different optimization steps in turbolizer, I found one of these nodes in the typer phase, but saw that it was gone in the TypedLowering phase, so this function must be a part of that phase. I also learned that JSCreateArray must be the node that gets created when you call `Array()`. The function splits based on the arity (number of arguments passed to) of `Array()`. 
 
@@ -201,7 +203,7 @@ We see in the patch that the length variable is updated in the case where 1 argu
 
 Now the bug report makes complete sense. The backing store is allocated from the typer's range and the actual length property is set by the argument passed at runtime in this very specific situation. The patch ensures that these values will always be the same now.
 
-# Patching the typer bug (the first time...) [link](https://github.com/v8/v8/commit/a2e971c56d1c46f7c71ccaf33057057308cc8484)
+## Patching the typer bug (the first time...) [link](https://github.com/v8/v8/commit/a2e971c56d1c46f7c71ccaf33057057308cc8484)
 
 This isn't even really the first time this function got patched. As the report alluded to, this code has been buggy before, but now we'll go through the patches for just fixing issue 1051017.
 
@@ -274,7 +276,7 @@ Another note:
 
 Before, the code was attempting to optimize in most events if we saw that the induction variable and incrementor were both type `kInteger` and would not result in NaN. The patch favors exiting early in the event that neither is a `kInteger` or the incrementor is +/- Infinity.
 
-# Second PoC
+## Second PoC
 
 You may have missed it, but that subtle switch in ordering actually introduced a new bug. In this week's edition of "Boy is JavaScript Awful" we'll discuss how easy it is to miss situations where a variable can change types. After the first 2 patches, another PoC was released.
 
@@ -323,7 +325,7 @@ This is what used to be at the *end* of the important code from before but is no
 
 For the next part of my testing I checked out commit a2e971c56d1c46f7c71ccaf33057057308cc8484, after these patches had been applied.
 
-## Turbolizer
+### Turbolizer
 
 ![Turbolizer PoC](https://raw.githubusercontent.com/m4dSt4cks/m4dst4cks.github.io/master/public/img/1051017_poc_2_jssubtract_type.PNG)
 
@@ -353,7 +355,7 @@ return i;
 
 Moral of the story, just because you don't get a crash doesn't mean there's not a bug.
 
-# Patching the typer bug again [link](https://chromium.googlesource.com/v8/v8.git/+/68099bffaca0b4cfa10eb0178606aa55fd85d8ef)
+## Patching the typer bug again [link](https://chromium.googlesource.com/v8/v8.git/+/68099bffaca0b4cfa10eb0178606aa55fd85d8ef)
 
 **Before**
 
@@ -415,7 +417,7 @@ if (initial_type.IsNone() ||
 
 The big change here is that we removed the code block that will retain the initial type and further expanded our fallback condition. The new comments explain the thought process and this new method really restricts the situations where we will choose to perform typing through this function.
 
-# Patching typer.cc to prevent related bugs [link](https://github.com/v8/v8/commit/e440eda4ad9bfd8983c9896de574556e8eaee406)
+## Patching typer.cc to prevent related bugs [link](https://github.com/v8/v8/commit/e440eda4ad9bfd8983c9896de574556e8eaee406)
 
 The V8 team decided to introduce additional checks on phi typing to ensure that similar bugs will be difficult to exploit. They made 2 key changes in this patch.
 
@@ -531,7 +533,7 @@ if (induction_vars != nullptr) {
 }
 ```
 
-# Third PoC
+## Third PoC
 
 > I'm attaching a proof-of-concept code for the zero increment bug that implements an OOB access primitive. Since the JSCreateArray vector is fixed, I had to use a different one. It turns out though there's a public blog post at https://doar-e.github.io/blog/2019/05/09/circumventing-chromes-hardening-of-typer-bugs/ which explains how to bypass the bounds check elimination hardening. Basically, if you make v8 notice an OOB access on the array variable you're going to abuse, Turbofan will emit a `NumberLessThan` node instead of `CheckBounds`. `NumberLessThan` is not covered by https://crbug.com/v8/8806 and can still be eliminated.
 
@@ -579,11 +581,11 @@ main();
 
 The third regression focuses on a technique for exploiting the previous typer bug using a different technique. When bounds checking removal was taken away from the simplified lowering phase, it did not take away the possibility of eliminating this node. The post mentioned in the report goes into great detail about bypassing this mitigation. The patch for that bypass was landed [here](https://github.com/v8/v8/commit/fa5fc748e53ad9d3ca44050d07659e858dbffd94). I hope to examine this technique more in a future post.
 
-# Conclusion
+## Conclusion
 
 There have been plenty of range type bugs found in V8's typer. However, there have not been as many techniques shown to use these bugs to gain OOB accesses. Bug 1051017 is interesting because it demonstrated 2 exploitation techniques that brought hardening changes to the code base. Patching these techniques means that certain optimizations may not take place. This begs the question of what new techniques will be found and if the V8 team will continue to block elevation methods or solely focus on patching the typer in the future.
 
-# Resources
+## Resources
 
 https://doar-e.github.io/blog/2019/01/28/introduction-to-turbofan/
 https://abiondo.me/2019/01/02/exploiting-math-expm1-v8/
