@@ -42,7 +42,7 @@ Some fuzzing products from outside Google have been introduced as well, such as 
 
 Finally, the [Chromium blog](https://chromium.googlesource.com/chromium/src/+/master/testing/libfuzzer/getting_started.md) has a helpful guide for getting started with fuzzing and creating new testing methods. Specifically [this guide](https://chromium.googlesource.com/v8/v8/+/refs/heads/master/test/fuzzer/README.md) outlines the process for introducing a new fuzzer to V8, much like how they ported a new WebAssembly fuzzer.
 
-## Checks
+### Checks
 
 When you look through the V8 code, you will notice a lot of CHECK and DCHECK macros. CHECK statements assert conditions that would have security implications if not met. These will force the browser to crash in order to prevent more serious consequences. DCHECK statements are only present in the debug build, and are meant to validate pre-conditions and post-conditions that should always be true. These statements can help fuzzers locate errors more closely to the source. For example, a type confusion may not cause a crash. Even if it does, it may take several hours to track down where the actual mistake is located in the code. However, DCHECKS can find where an assumption was broken and narrow the search scope.
 
