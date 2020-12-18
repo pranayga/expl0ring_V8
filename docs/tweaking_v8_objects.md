@@ -3,7 +3,7 @@
 
 Commit SHA: 600241ea64
 
-In this post, we shall take a look at the process which one might follow in order to modify / add to existing objects structures to store and propogate taint data.
+In this post, we shall take a look at the process which one might follow to modify / add to existing objects structures to store and propagate taint data.
 
 Let's start by taking a look at the changes which were made to the Objects and then proceed with how this integrates with the test of the system. Remember that our goal is to include tainting information along with any String class instance that we create.
 
@@ -13,9 +13,9 @@ Let's start by taking a look at the changes which were made to the Objects and t
  src/frames.h                                       |   19 +
 ```
 
-Frames are part of the execution framework inside V8. Frames help maintain stack frames for JSFunctions while they are executed and processed by the V8 engine. A stack contains parameters like the arguments passed to the JSFunction, parameters, context etc. Each Frame is marked by a Frame id slot to uniquely identify it. More details are described in`src/execution/frame-constants.h`  for the newer V8 revisions.
+Frames are part of the execution framework inside V8. Frames help maintain stack frames for JSFunctions while they are executed and processed by the V8 engine. A stack contains parameters like the arguments passed to the JSFunction, parameters, context, etc. Each Frame is marked by a Frame id slot to uniquely identify it. More details are described in`src/execution/frame-constants.h`  for the newer V8 revisions.
 
-In the code below, we augemtn the `Print()s` so that we can retrive the taint data for the current iframe. This allows us to print the taint data for objects more easily. This function is more of a helper function to help use debug better.
+In the code below, we augment the `Print()s` so that we can retrieve the taint data for the current iframe. This allows us to print the taint data for objects more easily. This function is more of a helper function to help users debug better.
 
 ```diff
 diff --git a/src/frames.cc b/src/frames.cc
@@ -124,9 +124,9 @@ index 6fabe4fddb..30d08e1058 100644
  src/objects/string.h                               |   22 +-
 ```
 `Objects.h` or now `src/objects/objects.h` is a central location for all the predefined Objects that V8 internally uses to implement all the basic classes in V8. The Maps for these classes are predefined and these form the basic building blocks for any object that the user creates. 
-Javascript is a weakly typed language. On top of that, it's much more premissive than `C++`, IE you can mix strings and Int inside an array (which are different types). In order to accomodate for this, as well as have fast execution with the bound checking, V8 has multiple kinds of Arrays, Maps etc.
+Javascript is a weakly typed language. On top of that, it's much more permissive than `C++`, IE you can mix strings and Int inside an array (which are different types). To accommodate for this, as well as have fast execution with the bound checking, V8 has multiple kinds of Arrays, Maps, etc.
 
-All Objects are derived fom what's called HeapObject (with the only other kind being a SMI). HeapObjects are stored on the V8 Heap and garbage collected. Whenever a piece of JS code needs to create a new Object, it can do so with the help of `Factory` specific to the isolate. That's where V8's Objects are created. Below is a small scippet from the Object inheritence structure in V8:
+All Objects are derived from what's called HeapObject (with the only other kind being an SMI). HeapObjects are stored on the V8 Heap and garbage collected. Whenever a piece of JS code needs to create a new Object, it can do so with the help of `Factory` specific to the isolate. That's where V8's Objects are created. Below is a small snippet from the Object inheritance structure in V8:
 ```
 //
 // Most object types in the V8 JavaScript are described in this file.
@@ -166,14 +166,14 @@ All Objects are derived fom what's called HeapObject (with the only other kind b
 
 ```
 
-Quite of lot of String right :D. Our Foucus here is on the String class. Specifically because we want to modify String class to include taint data which we can modify as and when different Strings interact. Since other String classes inherity from the base `String` class, they should also automatically inherit those modifications. Now let's take a look at the major changes from the `diff`.
+Quite of lot of String right :D. Our focus here is on the String class. Specifically, because we want to modify the String class to include taint data which we can modify as and when different Strings interact. Since other String classes inherit from the base `String` class, they should also automatically inherit those modifications. Now let's take a look at the major changes from the `diff`.
 
 ----
 #### `Objects.cc`
 
-Let's take a look at the changes to Objects.cc which are quite numerous.
+Let's take a look at the changes to Objects.cc which is quite numerous.
 
-1. `GetPropertyWithAccessor`: Here while invoking the API Fucntion, we need to include the taint tracking frame' ACCESSOR
+1. `GetPropertyWithAccessor`: Here while invoking the API Function, we need to include the taint tracking frame' ACCESSOR
 
 ```diff
 diff --git a/src/objects.cc b/src/objects.cc
@@ -198,7 +198,7 @@ index 6a297b93be..bf55e52c89 100644
      // TODO(rossberg): nicer would be to cast to some JSCallable here...
      return Object::GetPropertyWithDefinedGetter(
 ```
-2. `SetPropertyWithAccessor`: We seem to set the stack frame's setter function with traint tracking's Frame function which we control.
+2. `SetPropertyWithAccessor`: We seem to set the stack frame's setter function with taint tracking's Frame function which we control.
 ```diff
 @@ -1736,6 +1737,9 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
            Nothing<bool>());
@@ -211,7 +211,7 @@ index 6a297b93be..bf55e52c89 100644
      // v8::AccessorNameSetterCallback or
      // i::Accesors::AccessorNameBooleanSetterCallback, depending on whether the
 ```
-3. `SetPropertyWithAccessor`: We seem to add an argument literal to the tainting stack frame. post which we set the runtime reciever to our own taintracking version defined in the `Frames.cc`
+3. `SetPropertyWithAccessor`: We seem to add an argument literal to the tainting stack frame. post which we set the runtime receiver to our own taint tracking version defined in the `Frames.cc`
 ```diff
 @@ -1744,12 +1748,21 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
      // its Call method.
@@ -306,7 +306,7 @@ index 6a297b93be..bf55e52c89 100644
                               ClearRecordedSlots::kNo);
    if (has_pointers) {
 ```
-8. `MakeExternal`: This function is responsible for chaning the scope of a string. Thus here, we make sure to propogate the taint if the type of the object is `String`
+8. `MakeExternal`: This function is responsible for changing the scope of a string. Thus here, we make sure to propagate the taint if the type of the object is `String`
 ```diff
 @@ -2752,8 +2772,10 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
      }
@@ -320,14 +320,14 @@ index 6a297b93be..bf55e52c89 100644
  #endif  // DEBUG
    int size = this->Size();  // Byte size of the original string.
 ```
-9. `ToPrimitive`: This function is responisble to extract the primitive from an object. On faliure, it should return and preserve the taint data. 
+9. `ToPrimitive`: This function is responsible to extract the primitive from an object. On failure, it should return and preserve the taint data. 
 ```diff
 @@ -8884,9 +8908,12 @@ MaybeHandle<Object> JSReceiver::ToPrimitive(Handle<JSReceiver> receiver,
      Handle<Object> hint_string =
          isolate->factory()->ToPrimitiveHintString(hint);
      Handle<Object> result;
 +
-+    // TODO: mark with the tainttracking frame type, and add a way to
++    // TODO: mark with the taint tracking frame type, and add a way to
 +    // prepare for the frame type in the ast_serialization code
      ASSIGN_RETURN_ON_EXCEPTION(
          isolate, result,
@@ -338,7 +338,7 @@ index 6a297b93be..bf55e52c89 100644
      THROW_NEW_ERROR(isolate,
 ```
 ##### Major String class:
-10: `StringClass`: Here we take a look at the changes made to the string calss itself. We start by changing the internal representation of how the string class is managed. This involves changing the way it's created; that is it now uses two bytes to store each byte of data. One for the character and the other for the taint data.
+10: `StringClass`: Here we take a look at the changes made to the string class itself. We start by changing the internal representation of how the string class is managed. This involves changing the way it's created; that is it now uses two bytes to store each byte of data. One for the character and the other for the taint data.
 ```diff
 @@ -17346,18 +17420,29 @@ namespace {
  
@@ -374,7 +374,7 @@ index 6a297b93be..bf55e52c89 100644
    }
 
 ```
-11. `LookupString`: This also changes the way we look from the string from our string table. We accomodate the difference in structure to avoid taint bytes from getting compared.
+11. `LookupString`: This also changes the way we look at the string from our string table. We accommodate the difference in structure to avoid taint bytes from getting compared.
 ```diff
 @@ -17409,7 +17496,26 @@ Handle<String> StringTable::LookupString(Isolate* isolate,
    if (string->IsInternalizedString()) return string;
@@ -417,7 +417,7 @@ index 6a297b93be..bf55e52c89 100644
 +}
    int entry = table->FindEntry(isolate, key);
  
-   // String already in table.
+   // String already in the table.
    if (entry != kNotFound) {
 +exitpoint=1;
      return handle(String::cast(table->KeyAt(entry)), isolate);
@@ -434,7 +434,7 @@ index 6a297b93be..bf55e52c89 100644
  src/heap/heap.cc                                   |    2 +-
 ```
 
-V8 factory is exactly what you'd expect; It generates V8 heap objects and updates the required entires to enable garbage collection when they are no longer in use. The major changes in this sections are tweaks which allow us to propogate the taint from source string when a new string is getting created.
+V8 factory is exactly what you'd expect; It generates V8 heap objects and updates the required entries to enable garbage collection when they are no longer in use. The major changes in these sections are tweaks that allow us to propagate the taint from the source string when a new string is getting created.
 
 Below we also see a pattern of these lines:
 ```diff
@@ -442,7 +442,7 @@ Below we also see a pattern of these lines:
 +  tainttracking::OnNewExternalString(*external_string);
 +tainttracking::DebugCheckTaint(*external_string);
 ```
-This basically tells the engine no garbage collect the greations. Then we create a new external_string with a corresponding tainting info.
+This basically tells the engine no garbage collect the creations. Then we create a new external_string with corresponding tainting info.
 
 ```diff
 diff --git a/src/heap/factory.cc b/src/heap/factory.cc
@@ -790,7 +790,7 @@ index 0f7e638a35..ce73a004e5 100644
  
 +// XXXstroucki Future commit 683cf from 2019-03-04 removed this
    // For small strings we check whether the resource contains only
-   // one byte characters.  If yes, we use a different string map.
+   //one-byte characters.  If yes, we use a different string map.
    static const size_t kOneByteCheckLengthLimit = 32;
 @@ -1346,6 +1424,16 @@ MaybeHandle<String> Factory::NewExternalStringFromTwoByte(
      map = is_one_byte ? external_string_with_one_byte_data_map()
@@ -846,7 +846,7 @@ index 0f7e638a35..ce73a004e5 100644
 ### Runtime
 
 The `Runtime` relates to the runtime JS properties that the Javascript functions can define. 
-> NOTE: I do not understand this part well enought yet. Leaving out for future update
+> NOTE: I do not understand this part well enough yet. Leaving out for future update
 
 ```
  src/runtime/runtime-internal.cc                    |  241 ++
