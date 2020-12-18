@@ -5,181 +5,465 @@ Commit SHA: 600241ea64
 
 In this post, we shall take a look at the process which one might follow in order to modify / add to existing objects structures to store and propogate taint data.
 
-### Frames
+Let's start by taking a look at the changes which were made to the Objects and then proceed with how this integrates with the test of the system. Remember that our goal is to include tainting information along with any String class instance that we create.
+
+### Objects
+
 ```
- src/frames.cc                                      |   41 +
- src/frames.h                                       |   19 +
+ src/objects.cc                                     |  131 +-
+ src/objects.h                                      |    9 +-
+ ...
+ src/objects/string.h                               |   22 +-
 ```
-```diff
-diff --git a/src/frames.cc b/src/frames.cc
-index 93a4c7aca1..350049ce90 100644
---- a/src/frames.cc
-+++ b/src/frames.cc
-@@ -415,6 +415,10 @@ Code GetContainingCode(Isolate* isolate, Address pc) {
- }
- }  // namespace
- 
-+StackFrame::TaintStackFrameInfo StackFrame::InfoForTaintLog() {
-+  return TaintStackFrameInfo();
-+}
-+
- Code StackFrame::LookupCode() const {
-   Code result = GetContainingCode(isolate(), pc());
-   DCHECK_GE(pc(), result->InstructionStart());
-@@ -1971,6 +1975,43 @@ void PrintFunctionSource(StringStream* accumulator, SharedFunctionInfo shared,
- 
- }  // namespace
- 
-+StackFrame::TaintStackFrameInfo JavaScriptFrame::InfoForTaintLog() {
-+  DisallowHeapAllocation no_gc;
-+  JSFunction function = this->function();
-+  SharedFunctionInfo shared = function->shared();
-+  Object script_obj = shared->script();
-+  //ScopeInfo scope_info = shared->scope_info();
-+  //Code code = function->code();
-+
-+  TaintStackFrameInfo answer;
-+  auto isolate = shared->GetIsolate();
-+  answer.shared_info = Handle<SharedFunctionInfo>(shared, isolate);
-+  if (script_obj->IsScript()) {
-+    Script script = Script::cast(script_obj);
-+    answer.script = Handle<Script>(script, isolate);
-+
-+    // XXXstroucki In 8340a86 Code::FUNCTION went away
-+    //Address pc = this->pc();
-+    if (is_interpreted()) {
-+      const InterpretedFrame* iframe =
-+        reinterpret_cast<const InterpretedFrame*>(this);
-+      BytecodeArray bytecodes = iframe->GetBytecodeArray();
-+      int offset = iframe->GetBytecodeOffset();
-+      answer.position = AbstractCode::cast(bytecodes)->
-+        SourcePositionWithTaintTrackingAstIndex(
-+            offset, &answer.ast_taint_tracking_index);
-+      answer.lineNumber = script->GetLineNumber(answer.position) + 1;
-+    } else {
-+      answer.position = shared->StartPosition();
-+      answer.lineNumber = script->GetLineNumber(answer.position) + 1;
-+      answer.ast_taint_tracking_index = TaintStackFrameInfo::NO_SOURCE_INFO;
-+    }
-+
-+    return answer;
-+  } else {
-+    return answer;
-+  }
-+}
- 
- void JavaScriptFrame::Print(StringStream* accumulator,
-                             PrintMode mode,
-diff --git a/src/frames.h b/src/frames.h
-index 6fabe4fddb..30d08e1058 100644
---- a/src/frames.h
-+++ b/src/frames.h
-@@ -269,6 +269,23 @@ class StackFrame {
-   virtual void Print(StringStream* accumulator, PrintMode mode,
-                      int index) const;
- 
-+  struct TaintStackFrameInfo {
-+    static constexpr int NO_AST_INDEX = -1;
-+    static constexpr int NO_SOURCE_INFO = -2;
-+    static constexpr int SOURCE_POS_DEFAULT = -3;
-+    static constexpr int UNINSTRUMENTED = -4;
-+
-+    MaybeHandle<Script> script = MaybeHandle<Script>();
-+    MaybeHandle<SharedFunctionInfo> shared_info = MaybeHandle<SharedFunctionInfo
-+>();
-+    int lineNumber = -1;
-+    int position = -1;
-+    int ast_taint_tracking_index = NO_AST_INDEX;
-+  };
-+
-+
-+  virtual TaintStackFrameInfo InfoForTaintLog();
-+
-   Isolate* isolate() const { return isolate_; }
- 
-   void operator=(const StackFrame& original) = delete;
-@@ -717,6 +734,8 @@ class JavaScriptFrame : public StandardFrame {
-   void Print(StringStream* accumulator, PrintMode mode,
-              int index) const override;
- 
-+  TaintStackFrameInfo InfoForTaintLog() override;
-+
-   // Determine the code for the frame.
-   Code unchecked_code() const override;
+`Objects.h` or now `src/objects/objects.h` is a central location for all the predefined Objects that V8 internally uses to implement all the basic classes in V8. The Maps for these classes are predefined and these form the basic building blocks for any object that the user creates. 
+Javascript is a weakly typed language. On top of that, it's much more premissive than `C++`, IE you can mix strings and Int inside an array (which are different types). In order to accomodate for this, as well as have fast execution with the bound checking, V8 has multiple kinds of Arrays, Maps etc.
+
+All Objects are derived fom what's called HeapObject (with the only other kind being a SMI). HeapObjects are stored on the V8 Heap and garbage collected. Whenever a piece of JS code needs to create a new Object, it can do so with the help of `Factory` specific to the isolate. That's where V8's Objects are created. Below is a small scippet from the Object inheritence structure in V8:
 ```
-### Globals
-```
-src/globals.h                                      |   56 +
+//
+// Most object types in the V8 JavaScript are described in this file.
+//
+// Inheritance hierarchy:
+// - Object
+//   - Smi          (immediate small integer)
+//   - TaggedIndex  (properly sign-extended immediate small integer)
+//   - HeapObject   (superclass for everything allocated in the heap)
+//     - JSReceiver  (suitable for property access)
+//       - JSObject
+//         - JSArray
+//         - JSArrayBuffer
+......
+//     - PrimitiveHeapObject
+//       - BigInt
+//       - HeapNumber
+//       - Name
+//         - String
+//           - SeqString
+//             - SeqOneByteString
+//             - SeqTwoByteString
+//           - SlicedString
+//           - ConsString
+//           - ThinString
+//           - ExternalString
+//             - ExternalOneByteString
+//             - ExternalTwoByteString
+//           - InternalizedString
+//             - SeqInternalizedString
+//               - SeqOneByteInternalizedString
+//               - SeqTwoByteInternalizedString
+//             - ConsInternalizedString
+//             - ExternalInternalizedString
+//               - ExternalOneByteInternalizedString
+//               - ExternalTwoByteInternalizedString
+
 ```
 
+Quite of lot of String right :D. Our Foucus here is on the String class. Specifically because we want to modify String class to include taint data which we can modify as and when different Strings interact. Since other String classes inherity from the base `String` class, they should also automatically inherit those modifications. Now let's take a look at the major changes from the `diff`.
 ```diff
-diff --git a/src/globals.h b/src/globals.h
-index 49f5d83dd5..6459076c4f 100644
---- a/src/globals.h
-+++ b/src/globals.h
-@@ -20,6 +20,62 @@
+diff --git a/src/objects.cc b/src/objects.cc
+index 6a297b93be..bf55e52c89 100644
+--- a/src/objects.cc
++++ b/src/objects.cc
+@@ -106,6 +106,7 @@
+ #include "src/string-builder-inl.h"
+ #include "src/string-search.h"
+ #include "src/string-stream.h"
++#include "src/taint_tracking.h"
+ #include "src/unicode-decoder.h"
+ #include "src/unicode-inl.h"
+ #include "src/utils-inl.h"
+@@ -1657,7 +1658,7 @@ MaybeHandle<Object> Object::GetPropertyWithAccessor(LookupIterator* it) {
+     isolate->set_context(*holder->GetCreationContext());
+     return Builtins::InvokeApiFunction(
+         isolate, false, Handle<FunctionTemplateInfo>::cast(getter), receiver, 0,
+-        nullptr, isolate->factory()->undefined_value());
++        nullptr, isolate->factory()->undefined_value(), tainttracking::FrameType::GETTER_ACCESSOR);
+   } else if (getter->IsCallable()) {
+     // TODO(rossberg): nicer would be to cast to some JSCallable here...
+     return Object::GetPropertyWithDefinedGetter(
+```
+```diff
+@@ -1736,6 +1737,9 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
+           Nothing<bool>());
+     }
  
- #define V8_INFINITY std::numeric_limits<double>::infinity()
++    tainttracking::RuntimePrepareSymbolicStackFrame(
++        isolate, tainttracking::FrameType::SETTER_ACCESSOR);
++
+     // The actual type of setter callback is either
+     // v8::AccessorNameSetterCallback or
+     // i::Accesors::AccessorNameBooleanSetterCallback, depending on whether the
+```
+```diff
+@@ -1744,12 +1748,21 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
+     // its Call method.
+     PropertyCallbackArguments args(isolate, info->data(), *receiver, *holder,
+                                    should_throw);
++
++    tainttracking::RuntimeAddLiteralArgumentToStackFrame(isolate, value);
++    tainttracking::RuntimeSetReceiver(
++        isolate, holder, handle(ReadOnlyRoots(isolate).undefined_value(), isolate));
++    tainttracking::RuntimeEnterSymbolicStackFrame(isolate);
++
+     Handle<Object> result = args.CallAccessorSetter(info, name, value);
+     // In the case of AccessorNameSetterCallback, we know that the result value
+     // cannot have been set, so the result of Call will be null.  In the case of
+     // AccessorNameBooleanSetterCallback, the result will either be null
+     // (signalling an exception) or a boolean Oddball.
+     RETURN_VALUE_IF_SCHEDULED_EXCEPTION(isolate, Nothing<bool>());
++
++    tainttracking::RuntimeExitSymbolicStackFrame(isolate);
++
+     if (result.is_null()) return Just(true);
+     DCHECK(result->BooleanValue(isolate) || should_throw == kDontThrow);
+     return Just(result->BooleanValue(isolate));
+```
+```diff
+@@ -1765,7 +1778,8 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
+         isolate, Builtins::InvokeApiFunction(
+                      isolate, false, Handle<FunctionTemplateInfo>::cast(setter),
+                      receiver, arraysize(argv), argv,
+-                     isolate->factory()->undefined_value()),
++                     isolate->factory()->undefined_value(),
++                     tainttracking::FrameType::SETTER_ACCESSOR),
+         Nothing<bool>());
+     return Just(true);
+   } else if (setter->IsCallable()) {
+```
+```diff
+@@ -1799,7 +1813,7 @@ MaybeHandle<Object> Object::GetPropertyWithDefinedGetter(
+     return MaybeHandle<Object>();
+   }
  
-+namespace tainttracking {
-+enum FrameType {
-+  // From the JIT compiler called from JavaScript
-+  JS,
-+  JS_CALL_NEW,
-+  JS_CALL_RUNTIME,
+-  return Execution::Call(isolate, getter, receiver, 0, nullptr);
++  return Execution::Call(isolate, getter, receiver, 0, nullptr, tainttracking::FrameType::GETTER_ACCESSOR);
+ }
+ 
+```
+```diff
+@@ -1811,7 +1825,8 @@ Maybe<bool> Object::SetPropertyWithDefinedSetter(Handle<Object> receiver,
+ 
+   Handle<Object> argv[] = { value };
+   RETURN_ON_EXCEPTION_VALUE(isolate, Execution::Call(isolate, setter, receiver,
+-                                                     arraysize(argv), argv),
++                                                     arraysize(argv), argv,
++                                                     tainttracking::FrameType::SETTER_ACCESSOR),
+                             Nothing<bool>());
+   return Just(true);
+ }
+```
+```diff
+@@ -2638,6 +2653,7 @@ Handle<String> String::SlowFlatten(Isolate* isolate, Handle<ConsString> cons,
+     DisallowHeapAllocation no_gc;
+     WriteToFlat(*cons, flat->GetChars(no_gc), 0, length);
+     result = flat;
++    tainttracking::OnNewSubStringCopy(*cons, *result, 0, length);
+   } else {
+     Handle<SeqTwoByteString> flat = isolate->factory()->NewRawTwoByteString(
+         length, tenure).ToHandleChecked();
+```
+```diff
+@@ -2665,8 +2681,11 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
+     DCHECK(static_cast<size_t>(this->length()) == resource->length());
+     ScopedVector<uc16> smart_chars(this->length());
+     String::WriteToFlat(*this, smart_chars.start(), 0, this->length());
++    ScopedVector<uint8_t> smart_taint(this->length());
+     DCHECK_EQ(0, memcmp(smart_chars.start(), resource->data(),
+                         resource->length() * sizeof(smart_chars[0])));
++    tainttracking::FlattenTaintData(*this, smart_taint.start(),
++      0, this->length());
+   }
+ #endif  // DEBUG
+   int size = this->Size();  // Byte size of the original string.
+```
+```diff
+@@ -2717,6 +2736,7 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
+ 
+   // Byte size of the external String object.
+   int new_size = this->SizeFromMap(new_map);
++  DCHECK_GE(size, new_size);
+   heap->CreateFillerObjectAt(this->address() + new_size, size - new_size,
+                              ClearRecordedSlots::kNo);
+   if (has_pointers) {
+```
+```diff
+@@ -2752,8 +2772,10 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
+     }
+     ScopedVector<char> smart_chars(this->length());
+     String::WriteToFlat(*this, smart_chars.start(), 0, this->length());
++    ScopedVector<uint8_t> smart_taint(this->length()); // XXXstroucki seemed necessary
+     DCHECK_EQ(0, memcmp(smart_chars.start(), resource->data(),
+                         resource->length() * sizeof(smart_chars[0])));
++    tainttracking::FlattenTaintData(*this, smart_taint.start(), 0, this->length());
+   }
+ #endif  // DEBUG
+   int size = this->Size();  // Byte size of the original string.
+```
+```diff
+@@ -2791,6 +2813,7 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
+ 
+   // Byte size of the external String object.
+   int new_size = this->SizeFromMap(new_map);
++  DCHECK_GE(size, new_size);
+   heap->CreateFillerObjectAt(this->address() + new_size, size - new_size,
+                              ClearRecordedSlots::kNo);
+   if (has_pointers) {
+```
+```diff
+@@ -8873,7 +8896,8 @@ Handle<Object> JSObject::FastPropertyAt(Handle<JSObject> object,
+ 
+ // static
+ MaybeHandle<Object> JSReceiver::ToPrimitive(Handle<JSReceiver> receiver,
+-                                            ToPrimitiveHint hint) {
++                                            ToPrimitiveHint hint,
++                                            tainttracking::FrameType frame_type) {
+   Isolate* const isolate = receiver->GetIsolate();
+   Handle<Object> exotic_to_prim;
+   ASSIGN_RETURN_ON_EXCEPTION(
+```
+```diff
+@@ -8884,9 +8908,12 @@ MaybeHandle<Object> JSReceiver::ToPrimitive(Handle<JSReceiver> receiver,
+     Handle<Object> hint_string =
+         isolate->factory()->ToPrimitiveHintString(hint);
+     Handle<Object> result;
 +
-+  // Special case for the native context
-+  TOP_LEVEL,
++    // TODO: mark with the tainttracking frame type, and add a way to
++    // prepare for the frame type in the ast_serialization code
+     ASSIGN_RETURN_ON_EXCEPTION(
+         isolate, result,
+-        Execution::Call(isolate, exotic_to_prim, receiver, 1, &hint_string),
++        Execution::Call(isolate, exotic_to_prim, receiver, 1, &hint_string, frame_type),
+         Object);
+     if (result->IsPrimitive()) return result;
+     THROW_NEW_ERROR(isolate,
+```
+```diff
+@@ -12463,6 +12490,7 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
+   int old_length = string->length();
+   if (old_length <= new_length) return string;
+ 
++  bool one_byte = string->IsSeqOneByteString();
+   if (string->IsSeqOneByteString()) {
+     old_size = SeqOneByteString::SizeFor(old_length);
+     new_size = SeqOneByteString::SizeFor(new_length);
+```
+```diff
+@@ -12472,6 +12500,19 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
+     new_size = SeqTwoByteString::SizeFor(new_length);
+   }
+ 
++  // XXXstroucki what is the point of this? getting the taint then replacing it?
++  byte taint_data[new_length];
++  // initialize this to some invalid value to catch uninitialized use
++  {for (int foo=0; foo < new_length; foo++) taint_data[foo]=0xff;}
 +
-+  // Special case for property getters/setters
-+  SETTER_ACCESSOR,
-+  GETTER_ACCESSOR,
++  if (one_byte) {
++    DisallowHeapAllocation no_gc;
++    tainttracking::CopyOut(SeqOneByteString::cast(*string), taint_data, 0, new_length);
++  } else {
++    DisallowHeapAllocation no_gc;
++    tainttracking::CopyOut(SeqTwoByteString::cast(*string), taint_data, 0, new_length);
++  }
 +
-+  // Special case for implicit calls to toString in the left or right hand of a
-+  // plus operation.
-+  TO_STRING_CONVERT_PLUS_LEFT,
-+  TO_STRING_CONVERT_PLUS_RIGHT,
+   int delta = old_size - new_size;
+ 
+   Address start_of_string = string->address();
+```
+```diff
+@@ -12487,6 +12528,14 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
+   // for the left-over space to avoid races with the sweeper thread.
+   string->synchronized_set_length(new_length);
+ 
++  if (one_byte) {
++    DisallowHeapAllocation no_gc;
++    tainttracking::CopyIn(SeqOneByteString::cast(*string), taint_data, 0, new_length);
++  } else {
++    DisallowHeapAllocation no_gc;
++    tainttracking::CopyIn(SeqTwoByteString::cast(*string), taint_data, 0, new_length);
++  }
 +
-+  // Special case for Runtime::Call
-+  RUNTIME_CALL,
+   return string;
+ }
+ 
+```
+```diff
+@@ -14479,6 +14528,13 @@ void SharedFunctionInfo::InitFromFunctionLiteral(
+             lit->function_literal_id());
+     shared_info->set_uncompiled_data(*data);
+   }
 +
-+  // Special cases of builtins in builtins-x64.cc
-+  BUILTIN_CALL_OR_APPLY,
-+
-+  BUILTIN_REFLECT_APPLY,
-+  BUILTIN_REFLECT_CONSTRUCT,
-+  BUILTIN_APPLY,
-+  BUILTIN_CALL,
-+  BUILTIN_CONSTRUCT,
-+  BUILTIN_CALL_FUNCTION,
-+  BUILTIN_CALL_BOUND_FUNCTION,
-+  BUILTIN_CONSTRUCT_FUNCTION,
-+  BUILTIN_FUNCTION_PROTOTYPE_CALL,
-+  BUILTIN_FUNCTION_PROTOTYPE_APPLY,
-+  BUILTIN_JS_TRAMPOLINE,
-+  BUILTIN_INVOKE_FUNCTION_CODE,
-+
-+  // The following types need literal arguments
-+
-+  // A call to Execution::Call that is not instrumented
-+  UNKNOWN_CAPI,
-+
-+  // Execution::New
-+  UNKNOWN_CAPI_NEW,
-+
-+  // A call to Builtins::InvokeApiFunction
-+  UNKNOWN_EXTERNAL,
-+
-+
-+  FIRST_NEEDS_LITERAL = UNKNOWN_CAPI,
-+  FIRST_NEEDS_AUTO_EXIT = BUILTIN_REFLECT_APPLY,
-+  LAST_NEEDS_AUTO_EXIT = BUILTIN_INVOKE_FUNCTION_CODE,
-+};
++  std::unique_ptr<uint8_t[]> taint = nullptr;
++  tainttracking::V8NodeLabelSerializer ser;
++  if (ser.Serialize(taint, lit->GetTaintTrackingLabel())) {
++    Handle<String> obj = isolate->factory()->NewStringFromOneByte(VectorOf(taint.get(), sizeof(taint.get()))).ToHandleChecked();
++    shared_info->set_taint_node_label(*obj);
++  }
+ }
+ 
+```
+```diff
+ void SharedFunctionInfo::SetExpectedNofPropertiesFromEstimate(
+@@ -14760,6 +14816,24 @@ int AbstractCode::SourcePosition(int offset) {
+   return position;
+ }
+ 
++int AbstractCode::SourcePositionWithTaintTrackingAstIndex(
++    int offset, int* out_ast_index) {
++  DCHECK_NOT_NULL(out_ast_index);
++  int position = 0;
++  int ast_index =
++    v8::internal::StackFrame::TaintStackFrameInfo::SOURCE_POS_DEFAULT;
++  // Subtract one because the current PC is one instruction after the call site.
++  if (IsCode()) offset--;
++  for (SourcePositionTableIterator iterator(source_position_table());
++       !iterator.done() && iterator.code_offset() <= offset;
++       iterator.Advance()) {
++    position = iterator.source_position().ScriptOffset();
++    ast_index = iterator.ast_taint_tracking_index();
++  }
++  *out_ast_index = ast_index;
++  return position;
 +}
 +
- namespace v8 {
+ int AbstractCode::SourceStatementPosition(int offset) {
+   // First find the closest position.
+   int position = SourcePosition(offset);
+```
+```diff
+@@ -17346,18 +17420,29 @@ namespace {
  
- namespace base {
+ template <class StringClass>
+ void MigrateExternalStringResource(Isolate* isolate, String from, String to) {
+-  StringClass cast_from = StringClass::cast(from);
++  // XXXstroucki protect against crash where internalised representation
++  // is of one byte and external string is two byte
++  void *from_resource = nullptr;
++  if (from->IsExternalTwoByteString()) {
++    ExternalTwoByteString cast_from = ExternalTwoByteString::cast(from);
++    from_resource = (void *)cast_from->resource();
++  } else {
++    ExternalOneByteString cast_from = ExternalOneByteString::cast(from);
++    from_resource = (void *)cast_from->resource();
++  }
++    
+   StringClass cast_to = StringClass::cast(to);
+   const typename StringClass::Resource* to_resource = cast_to->resource();
+   if (to_resource == nullptr) {
+     // |to| is a just-created internalized copy of |from|. Migrate the resource.
++    StringClass cast_from = StringClass::cast(from);
+     cast_to->SetResource(isolate, cast_from->resource());
+     // Zap |from|'s resource pointer to reflect the fact that |from| has
+     // relinquished ownership of its resource.
+     isolate->heap()->UpdateExternalString(
+         from, ExternalString::cast(from)->ExternalPayloadSize(), 0);
+     cast_from->SetResource(isolate, nullptr);
+-  } else if (to_resource != cast_from->resource()) {
++  } else if ((const void *)to_resource != from_resource) {
+     // |to| already existed and has its own resource. Finalize |from|.
+     isolate->heap()->FinalizeExternalString(from);
+   }
+```
+```diff
+@@ -17402,6 +17487,8 @@ void MakeStringThin(String string, String internalized, Isolate* isolate) {
+ 
+ }  // namespace
+ 
++static int exitpoint = 0;
++
+ // static
+ Handle<String> StringTable::LookupString(Isolate* isolate,
+                                          Handle<String> string) {
+```
+```diff
+@@ -17409,7 +17496,26 @@ Handle<String> StringTable::LookupString(Isolate* isolate,
+   if (string->IsInternalizedString()) return string;
+ 
+   InternalizedStringKey key(string);
+-  Handle<String> result = LookupKey(isolate, &key);
++/*
++if (string->length() == 3 && string->IsExternalTwoByteString()) {
++  Handle<ExternalTwoByteString> bla = Handle<ExternalTwoByteString>::cast(string);
++  char* foo = (char *)bla->GetChars();
++  if (foo[0] == 'k' && foo[2] == 'e' && foo[4] == 'y') {
++    static volatile int bar = 1;while (bar);
++  }
++}
++*/
++if (string->IsExternalTwoByteString()) {
++    //static volatile int bar = 1;while (bar);
++}
++  Handle<String> result = LookupKey(isolate, &key, string);
++/*
++if (string->IsExternalTwoByteString()) {
++  USE(exitpoint);
++  // need to compare
++  //DCHECK(result->IsExternalTwoByteString());
++}
++*/
+ 
+   if (FLAG_thin_strings) {
+     if (!string->IsInternalizedString()) {
+```
+```diff
+@@ -17438,12 +17544,16 @@ Handle<String> StringTable::LookupString(Isolate* isolate,
+ }
+ 
+ // static
+-Handle<String> StringTable::LookupKey(Isolate* isolate, StringTableKey* key) {
++Handle<String> StringTable::LookupKey(Isolate* isolate, StringTableKey* key, Handle<String> string) {
+   Handle<StringTable> table = isolate->factory()->string_table();
++if (!string->is_null() && string->IsExternalTwoByteString()) {
++  //static volatile int foo = 1;while (foo);
++}
+   int entry = table->FindEntry(isolate, key);
+ 
+   // String already in table.
+   if (entry != kNotFound) {
++exitpoint=1;
+     return handle(String::cast(table->KeyAt(entry)), isolate);
+   }
+ 
+```
+```diff
+@@ -17452,6 +17562,7 @@ Handle<String> StringTable::LookupKey(Isolate* isolate, StringTableKey* key) {
+   table = StringTable::EnsureCapacity(isolate, table, 1);
+   isolate->heap()->SetRootStringTable(*table);
+ 
++exitpoint=2;
+   return AddKeyNoResize(isolate, key);
+ }
+ 
+```
+```diff
+diff --git a/src/objects.h b/src/objects.h
+index 72d3511c6f..f1f24387a7 100644
+--- a/src/objects.h
++++ b/src/objects.h
+@@ -182,6 +182,12 @@
+ //  Smi:        [31 bit signed int] 0
+ //  HeapObject: [32 bit direct pointer] (4 byte aligned) | 01
+ 
++namespace tainttracking {
++  inline int SizeForTaint(int length) {
++    return length * v8::internal::kCharSize;
++  }
++};
++
+ namespace v8 {
+ namespace internal {
+ 
+@@ -692,7 +698,8 @@ class Object {
+ 
+   // ES6 section 7.1.1 ToPrimitive
+   V8_WARN_UNUSED_RESULT static inline MaybeHandle<Object> ToPrimitive(
+-      Handle<Object> input, ToPrimitiveHint hint = ToPrimitiveHint::kDefault);
++      Handle<Object> input, ToPrimitiveHint hint = ToPrimitiveHint::kDefault,
++      tainttracking::FrameType frame_type = tainttracking::FrameType::UNKNOWN_CAPI);
+ 
+   // ES6 section 7.1.3 ToNumber
+   V8_WARN_UNUSED_RESULT static inline MaybeHandle<Object> ToNumber(
+diff --git a/src/objects/code.h b/src/objects/code.h
+index 6239ef9a0b..5212b0877c 100644
 ```
 
 ### Factory
@@ -190,6 +474,8 @@ index 49f5d83dd5..6459076c4f 100644
  src/heap/heap-inl.h                                |    1 +
  src/heap/heap.cc                                   |    2 +-
 ```
+
+V8 factory is exactly what you'd expect; It generates V8 heap objects and updates the required entires to enable garbage collection when they are no longer in use. The major changes in this sections are tweaks which allow us to propogate the taint from source string when a new string is getting created.
 
 ```diff
 diff --git a/src/heap/factory.cc b/src/heap/factory.cc
@@ -671,378 +957,118 @@ index ed1bb91037..80f56844ef 100644
      DCHECK(result != ReadOnlyRoots(this).exception());
 ```
 
-### Objects
+### Frames
+```
+ src/frames.cc                                      |   41 +
+ src/frames.h                                       |   19 +
+```
 
-```
- src/objects.cc                                     |  131 +-
- src/objects.h                                      |    9 +-
- ...
- src/objects/string.h                               |   22 +-
-```
+Frames are part of the execution framework inside V8. Frames help maintain stack frames for JSFunctions while they are executed and processed by the V8 engine. A stack contains parameters like the arguments passed to the JSFunction, parameters, context etc. Each Frame is marked by a Frame id slot to uniquely identify it. More details are described in`src/execution/frame-constants.h`  for the newer V8 revisions.
+
+In the code below, we augemtn the `Print()s` so that we can retrive the taint data for the current iframe. This allows us to print the taint data for objects more easily. This function is more of a helper function to help use debug better.
 
 ```diff
-diff --git a/src/objects.cc b/src/objects.cc
-index 6a297b93be..bf55e52c89 100644
---- a/src/objects.cc
-+++ b/src/objects.cc
-@@ -106,6 +106,7 @@
- #include "src/string-builder-inl.h"
- #include "src/string-search.h"
- #include "src/string-stream.h"
-+#include "src/taint_tracking.h"
- #include "src/unicode-decoder.h"
- #include "src/unicode-inl.h"
- #include "src/utils-inl.h"
-@@ -1657,7 +1658,7 @@ MaybeHandle<Object> Object::GetPropertyWithAccessor(LookupIterator* it) {
-     isolate->set_context(*holder->GetCreationContext());
-     return Builtins::InvokeApiFunction(
-         isolate, false, Handle<FunctionTemplateInfo>::cast(getter), receiver, 0,
--        nullptr, isolate->factory()->undefined_value());
-+        nullptr, isolate->factory()->undefined_value(), tainttracking::FrameType::GETTER_ACCESSOR);
-   } else if (getter->IsCallable()) {
-     // TODO(rossberg): nicer would be to cast to some JSCallable here...
-     return Object::GetPropertyWithDefinedGetter(
-@@ -1736,6 +1737,9 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
-           Nothing<bool>());
-     }
- 
-+    tainttracking::RuntimePrepareSymbolicStackFrame(
-+        isolate, tainttracking::FrameType::SETTER_ACCESSOR);
-+
-     // The actual type of setter callback is either
-     // v8::AccessorNameSetterCallback or
-     // i::Accesors::AccessorNameBooleanSetterCallback, depending on whether the
-@@ -1744,12 +1748,21 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
-     // its Call method.
-     PropertyCallbackArguments args(isolate, info->data(), *receiver, *holder,
-                                    should_throw);
-+
-+    tainttracking::RuntimeAddLiteralArgumentToStackFrame(isolate, value);
-+    tainttracking::RuntimeSetReceiver(
-+        isolate, holder, handle(ReadOnlyRoots(isolate).undefined_value(), isolate));
-+    tainttracking::RuntimeEnterSymbolicStackFrame(isolate);
-+
-     Handle<Object> result = args.CallAccessorSetter(info, name, value);
-     // In the case of AccessorNameSetterCallback, we know that the result value
-     // cannot have been set, so the result of Call will be null.  In the case of
-     // AccessorNameBooleanSetterCallback, the result will either be null
-     // (signalling an exception) or a boolean Oddball.
-     RETURN_VALUE_IF_SCHEDULED_EXCEPTION(isolate, Nothing<bool>());
-+
-+    tainttracking::RuntimeExitSymbolicStackFrame(isolate);
-+
-     if (result.is_null()) return Just(true);
-     DCHECK(result->BooleanValue(isolate) || should_throw == kDontThrow);
-     return Just(result->BooleanValue(isolate));
-@@ -1765,7 +1778,8 @@ Maybe<bool> Object::SetPropertyWithAccessor(LookupIterator* it,
-         isolate, Builtins::InvokeApiFunction(
-                      isolate, false, Handle<FunctionTemplateInfo>::cast(setter),
-                      receiver, arraysize(argv), argv,
--                     isolate->factory()->undefined_value()),
-+                     isolate->factory()->undefined_value(),
-+                     tainttracking::FrameType::SETTER_ACCESSOR),
-         Nothing<bool>());
-     return Just(true);
-   } else if (setter->IsCallable()) {
-@@ -1799,7 +1813,7 @@ MaybeHandle<Object> Object::GetPropertyWithDefinedGetter(
-     return MaybeHandle<Object>();
-   }
- 
--  return Execution::Call(isolate, getter, receiver, 0, nullptr);
-+  return Execution::Call(isolate, getter, receiver, 0, nullptr, tainttracking::FrameType::GETTER_ACCESSOR);
+diff --git a/src/frames.cc b/src/frames.cc
+index 93a4c7aca1..350049ce90 100644
+--- a/src/frames.cc
++++ b/src/frames.cc
+@@ -415,6 +415,10 @@ Code GetContainingCode(Isolate* isolate, Address pc) {
  }
+ }  // namespace
  
- 
-@@ -1811,7 +1825,8 @@ Maybe<bool> Object::SetPropertyWithDefinedSetter(Handle<Object> receiver,
- 
-   Handle<Object> argv[] = { value };
-   RETURN_ON_EXCEPTION_VALUE(isolate, Execution::Call(isolate, setter, receiver,
--                                                     arraysize(argv), argv),
-+                                                     arraysize(argv), argv,
-+                                                     tainttracking::FrameType::SETTER_ACCESSOR),
-                             Nothing<bool>());
-   return Just(true);
- }
-@@ -2638,6 +2653,7 @@ Handle<String> String::SlowFlatten(Isolate* isolate, Handle<ConsString> cons,
-     DisallowHeapAllocation no_gc;
-     WriteToFlat(*cons, flat->GetChars(no_gc), 0, length);
-     result = flat;
-+    tainttracking::OnNewSubStringCopy(*cons, *result, 0, length);
-   } else {
-     Handle<SeqTwoByteString> flat = isolate->factory()->NewRawTwoByteString(
-         length, tenure).ToHandleChecked();
-@@ -2665,8 +2681,11 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
-     DCHECK(static_cast<size_t>(this->length()) == resource->length());
-     ScopedVector<uc16> smart_chars(this->length());
-     String::WriteToFlat(*this, smart_chars.start(), 0, this->length());
-+    ScopedVector<uint8_t> smart_taint(this->length());
-     DCHECK_EQ(0, memcmp(smart_chars.start(), resource->data(),
-                         resource->length() * sizeof(smart_chars[0])));
-+    tainttracking::FlattenTaintData(*this, smart_taint.start(),
-+      0, this->length());
-   }
- #endif  // DEBUG
-   int size = this->Size();  // Byte size of the original string.
-@@ -2717,6 +2736,7 @@ bool String::MakeExternal(v8::String::ExternalStringResource* resource) {
- 
-   // Byte size of the external String object.
-   int new_size = this->SizeFromMap(new_map);
-+  DCHECK_GE(size, new_size);
-   heap->CreateFillerObjectAt(this->address() + new_size, size - new_size,
-                              ClearRecordedSlots::kNo);
-   if (has_pointers) {
-@@ -2752,8 +2772,10 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
-     }
-     ScopedVector<char> smart_chars(this->length());
-     String::WriteToFlat(*this, smart_chars.start(), 0, this->length());
-+    ScopedVector<uint8_t> smart_taint(this->length()); // XXXstroucki seemed necessary
-     DCHECK_EQ(0, memcmp(smart_chars.start(), resource->data(),
-                         resource->length() * sizeof(smart_chars[0])));
-+    tainttracking::FlattenTaintData(*this, smart_taint.start(), 0, this->length());
-   }
- #endif  // DEBUG
-   int size = this->Size();  // Byte size of the original string.
-@@ -2791,6 +2813,7 @@ bool String::MakeExternal(v8::String::ExternalOneByteStringResource* resource) {
- 
-   // Byte size of the external String object.
-   int new_size = this->SizeFromMap(new_map);
-+  DCHECK_GE(size, new_size);
-   heap->CreateFillerObjectAt(this->address() + new_size, size - new_size,
-                              ClearRecordedSlots::kNo);
-   if (has_pointers) {
-@@ -8873,7 +8896,8 @@ Handle<Object> JSObject::FastPropertyAt(Handle<JSObject> object,
- 
- // static
- MaybeHandle<Object> JSReceiver::ToPrimitive(Handle<JSReceiver> receiver,
--                                            ToPrimitiveHint hint) {
-+                                            ToPrimitiveHint hint,
-+                                            tainttracking::FrameType frame_type) {
-   Isolate* const isolate = receiver->GetIsolate();
-   Handle<Object> exotic_to_prim;
-   ASSIGN_RETURN_ON_EXCEPTION(
-@@ -8884,9 +8908,12 @@ MaybeHandle<Object> JSReceiver::ToPrimitive(Handle<JSReceiver> receiver,
-     Handle<Object> hint_string =
-         isolate->factory()->ToPrimitiveHintString(hint);
-     Handle<Object> result;
-+
-+    // TODO: mark with the tainttracking frame type, and add a way to
-+    // prepare for the frame type in the ast_serialization code
-     ASSIGN_RETURN_ON_EXCEPTION(
-         isolate, result,
--        Execution::Call(isolate, exotic_to_prim, receiver, 1, &hint_string),
-+        Execution::Call(isolate, exotic_to_prim, receiver, 1, &hint_string, frame_type),
-         Object);
-     if (result->IsPrimitive()) return result;
-     THROW_NEW_ERROR(isolate,
-@@ -12463,6 +12490,7 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
-   int old_length = string->length();
-   if (old_length <= new_length) return string;
- 
-+  bool one_byte = string->IsSeqOneByteString();
-   if (string->IsSeqOneByteString()) {
-     old_size = SeqOneByteString::SizeFor(old_length);
-     new_size = SeqOneByteString::SizeFor(new_length);
-@@ -12472,6 +12500,19 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
-     new_size = SeqTwoByteString::SizeFor(new_length);
-   }
- 
-+  // XXXstroucki what is the point of this? getting the taint then replacing it?
-+  byte taint_data[new_length];
-+  // initialize this to some invalid value to catch uninitialized use
-+  {for (int foo=0; foo < new_length; foo++) taint_data[foo]=0xff;}
-+
-+  if (one_byte) {
-+    DisallowHeapAllocation no_gc;
-+    tainttracking::CopyOut(SeqOneByteString::cast(*string), taint_data, 0, new_length);
-+  } else {
-+    DisallowHeapAllocation no_gc;
-+    tainttracking::CopyOut(SeqTwoByteString::cast(*string), taint_data, 0, new_length);
-+  }
-+
-   int delta = old_size - new_size;
- 
-   Address start_of_string = string->address();
-@@ -12487,6 +12528,14 @@ Handle<String> SeqString::Truncate(Handle<SeqString> string, int new_length) {
-   // for the left-over space to avoid races with the sweeper thread.
-   string->synchronized_set_length(new_length);
- 
-+  if (one_byte) {
-+    DisallowHeapAllocation no_gc;
-+    tainttracking::CopyIn(SeqOneByteString::cast(*string), taint_data, 0, new_length);
-+  } else {
-+    DisallowHeapAllocation no_gc;
-+    tainttracking::CopyIn(SeqTwoByteString::cast(*string), taint_data, 0, new_length);
-+  }
-+
-   return string;
- }
- 
-@@ -14479,6 +14528,13 @@ void SharedFunctionInfo::InitFromFunctionLiteral(
-             lit->function_literal_id());
-     shared_info->set_uncompiled_data(*data);
-   }
-+
-+  std::unique_ptr<uint8_t[]> taint = nullptr;
-+  tainttracking::V8NodeLabelSerializer ser;
-+  if (ser.Serialize(taint, lit->GetTaintTrackingLabel())) {
-+    Handle<String> obj = isolate->factory()->NewStringFromOneByte(VectorOf(taint.get(), sizeof(taint.get()))).ToHandleChecked();
-+    shared_info->set_taint_node_label(*obj);
-+  }
- }
- 
- void SharedFunctionInfo::SetExpectedNofPropertiesFromEstimate(
-@@ -14760,6 +14816,24 @@ int AbstractCode::SourcePosition(int offset) {
-   return position;
- }
- 
-+int AbstractCode::SourcePositionWithTaintTrackingAstIndex(
-+    int offset, int* out_ast_index) {
-+  DCHECK_NOT_NULL(out_ast_index);
-+  int position = 0;
-+  int ast_index =
-+    v8::internal::StackFrame::TaintStackFrameInfo::SOURCE_POS_DEFAULT;
-+  // Subtract one because the current PC is one instruction after the call site.
-+  if (IsCode()) offset--;
-+  for (SourcePositionTableIterator iterator(source_position_table());
-+       !iterator.done() && iterator.code_offset() <= offset;
-+       iterator.Advance()) {
-+    position = iterator.source_position().ScriptOffset();
-+    ast_index = iterator.ast_taint_tracking_index();
-+  }
-+  *out_ast_index = ast_index;
-+  return position;
++StackFrame::TaintStackFrameInfo StackFrame::InfoForTaintLog() {
++  return TaintStackFrameInfo();
 +}
 +
- int AbstractCode::SourceStatementPosition(int offset) {
-   // First find the closest position.
-   int position = SourcePosition(offset);
-@@ -17346,18 +17420,29 @@ namespace {
- 
- template <class StringClass>
- void MigrateExternalStringResource(Isolate* isolate, String from, String to) {
--  StringClass cast_from = StringClass::cast(from);
-+  // XXXstroucki protect against crash where internalised representation
-+  // is of one byte and external string is two byte
-+  void *from_resource = nullptr;
-+  if (from->IsExternalTwoByteString()) {
-+    ExternalTwoByteString cast_from = ExternalTwoByteString::cast(from);
-+    from_resource = (void *)cast_from->resource();
-+  } else {
-+    ExternalOneByteString cast_from = ExternalOneByteString::cast(from);
-+    from_resource = (void *)cast_from->resource();
-+  }
-+    
-   StringClass cast_to = StringClass::cast(to);
-   const typename StringClass::Resource* to_resource = cast_to->resource();
-   if (to_resource == nullptr) {
-     // |to| is a just-created internalized copy of |from|. Migrate the resource.
-+    StringClass cast_from = StringClass::cast(from);
-     cast_to->SetResource(isolate, cast_from->resource());
-     // Zap |from|'s resource pointer to reflect the fact that |from| has
-     // relinquished ownership of its resource.
-     isolate->heap()->UpdateExternalString(
-         from, ExternalString::cast(from)->ExternalPayloadSize(), 0);
-     cast_from->SetResource(isolate, nullptr);
--  } else if (to_resource != cast_from->resource()) {
-+  } else if ((const void *)to_resource != from_resource) {
-     // |to| already existed and has its own resource. Finalize |from|.
-     isolate->heap()->FinalizeExternalString(from);
-   }
-@@ -17402,6 +17487,8 @@ void MakeStringThin(String string, String internalized, Isolate* isolate) {
+ Code StackFrame::LookupCode() const {
+   Code result = GetContainingCode(isolate(), pc());
+   DCHECK_GE(pc(), result->InstructionStart());
+@@ -1971,6 +1975,43 @@ void PrintFunctionSource(StringStream* accumulator, SharedFunctionInfo shared,
  
  }  // namespace
  
-+static int exitpoint = 0;
++StackFrame::TaintStackFrameInfo JavaScriptFrame::InfoForTaintLog() {
++  DisallowHeapAllocation no_gc;
++  JSFunction function = this->function();
++  SharedFunctionInfo shared = function->shared();
++  Object script_obj = shared->script();
++  //ScopeInfo scope_info = shared->scope_info();
++  //Code code = function->code();
 +
- // static
- Handle<String> StringTable::LookupString(Isolate* isolate,
-                                          Handle<String> string) {
-@@ -17409,7 +17496,26 @@ Handle<String> StringTable::LookupString(Isolate* isolate,
-   if (string->IsInternalizedString()) return string;
- 
-   InternalizedStringKey key(string);
--  Handle<String> result = LookupKey(isolate, &key);
-+/*
-+if (string->length() == 3 && string->IsExternalTwoByteString()) {
-+  Handle<ExternalTwoByteString> bla = Handle<ExternalTwoByteString>::cast(string);
-+  char* foo = (char *)bla->GetChars();
-+  if (foo[0] == 'k' && foo[2] == 'e' && foo[4] == 'y') {
-+    static volatile int bar = 1;while (bar);
++  TaintStackFrameInfo answer;
++  auto isolate = shared->GetIsolate();
++  answer.shared_info = Handle<SharedFunctionInfo>(shared, isolate);
++  if (script_obj->IsScript()) {
++    Script script = Script::cast(script_obj);
++    answer.script = Handle<Script>(script, isolate);
++
++    // XXXstroucki In 8340a86 Code::FUNCTION went away
++    //Address pc = this->pc();
++    if (is_interpreted()) {
++      const InterpretedFrame* iframe =
++        reinterpret_cast<const InterpretedFrame*>(this);
++      BytecodeArray bytecodes = iframe->GetBytecodeArray();
++      int offset = iframe->GetBytecodeOffset();
++      answer.position = AbstractCode::cast(bytecodes)->
++        SourcePositionWithTaintTrackingAstIndex(
++            offset, &answer.ast_taint_tracking_index);
++      answer.lineNumber = script->GetLineNumber(answer.position) + 1;
++    } else {
++      answer.position = shared->StartPosition();
++      answer.lineNumber = script->GetLineNumber(answer.position) + 1;
++      answer.ast_taint_tracking_index = TaintStackFrameInfo::NO_SOURCE_INFO;
++    }
++
++    return answer;
++  } else {
++    return answer;
 +  }
 +}
-+*/
-+if (string->IsExternalTwoByteString()) {
-+    //static volatile int bar = 1;while (bar);
-+}
-+  Handle<String> result = LookupKey(isolate, &key, string);
-+/*
-+if (string->IsExternalTwoByteString()) {
-+  USE(exitpoint);
-+  // need to compare
-+  //DCHECK(result->IsExternalTwoByteString());
-+}
-+*/
  
-   if (FLAG_thin_strings) {
-     if (!string->IsInternalizedString()) {
-@@ -17438,12 +17544,16 @@ Handle<String> StringTable::LookupString(Isolate* isolate,
- }
+ void JavaScriptFrame::Print(StringStream* accumulator,
+                             PrintMode mode,
+diff --git a/src/frames.h b/src/frames.h
+index 6fabe4fddb..30d08e1058 100644
+--- a/src/frames.h
++++ b/src/frames.h
+@@ -269,6 +269,23 @@ class StackFrame {
+   virtual void Print(StringStream* accumulator, PrintMode mode,
+                      int index) const;
  
- // static
--Handle<String> StringTable::LookupKey(Isolate* isolate, StringTableKey* key) {
-+Handle<String> StringTable::LookupKey(Isolate* isolate, StringTableKey* key, Handle<String> string) {
-   Handle<StringTable> table = isolate->factory()->string_table();
-+if (!string->is_null() && string->IsExternalTwoByteString()) {
-+  //static volatile int foo = 1;while (foo);
-+}
-   int entry = table->FindEntry(isolate, key);
- 
-   // String already in table.
-   if (entry != kNotFound) {
-+exitpoint=1;
-     return handle(String::cast(table->KeyAt(entry)), isolate);
-   }
- 
-@@ -17452,6 +17562,7 @@ Handle<String> StringTable::LookupKey(Isolate* isolate, StringTableKey* key) {
-   table = StringTable::EnsureCapacity(isolate, table, 1);
-   isolate->heap()->SetRootStringTable(*table);
- 
-+exitpoint=2;
-   return AddKeyNoResize(isolate, key);
- }
- 
-diff --git a/src/objects.h b/src/objects.h
-index 72d3511c6f..f1f24387a7 100644
---- a/src/objects.h
-+++ b/src/objects.h
-@@ -182,6 +182,12 @@
- //  Smi:        [31 bit signed int] 0
- //  HeapObject: [32 bit direct pointer] (4 byte aligned) | 01
- 
-+namespace tainttracking {
-+  inline int SizeForTaint(int length) {
-+    return length * v8::internal::kCharSize;
-+  }
-+};
++  struct TaintStackFrameInfo {
++    static constexpr int NO_AST_INDEX = -1;
++    static constexpr int NO_SOURCE_INFO = -2;
++    static constexpr int SOURCE_POS_DEFAULT = -3;
++    static constexpr int UNINSTRUMENTED = -4;
 +
- namespace v8 {
- namespace internal {
++    MaybeHandle<Script> script = MaybeHandle<Script>();
++    MaybeHandle<SharedFunctionInfo> shared_info = MaybeHandle<SharedFunctionInfo
++>();
++    int lineNumber = -1;
++    int position = -1;
++    int ast_taint_tracking_index = NO_AST_INDEX;
++  };
++
++
++  virtual TaintStackFrameInfo InfoForTaintLog();
++
+   Isolate* isolate() const { return isolate_; }
  
-@@ -692,7 +698,8 @@ class Object {
+   void operator=(const StackFrame& original) = delete;
+@@ -717,6 +734,8 @@ class JavaScriptFrame : public StandardFrame {
+   void Print(StringStream* accumulator, PrintMode mode,
+              int index) const override;
  
-   // ES6 section 7.1.1 ToPrimitive
-   V8_WARN_UNUSED_RESULT static inline MaybeHandle<Object> ToPrimitive(
--      Handle<Object> input, ToPrimitiveHint hint = ToPrimitiveHint::kDefault);
-+      Handle<Object> input, ToPrimitiveHint hint = ToPrimitiveHint::kDefault,
-+      tainttracking::FrameType frame_type = tainttracking::FrameType::UNKNOWN_CAPI);
- 
-   // ES6 section 7.1.3 ToNumber
-   V8_WARN_UNUSED_RESULT static inline MaybeHandle<Object> ToNumber(
-diff --git a/src/objects/code.h b/src/objects/code.h
-index 6239ef9a0b..5212b0877c 100644
++  TaintStackFrameInfo InfoForTaintLog() override;
++
+   // Determine the code for the frame.
+   Code unchecked_code() const override;
 ```
 
 ### Runtime
+
+The `Runtime` relates to the runtime JS properties that the Javascript functions can define. 
+> NOTE: I do not understand this part well enought yet. Leaving out for future update
 
 ```
  src/runtime/runtime-internal.cc                    |  241 ++
