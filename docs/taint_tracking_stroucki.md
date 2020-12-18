@@ -4,17 +4,17 @@
 Commit SHA: 600241ea64
 
 ## Introduction
-This post discusses the internals the changes which were made into the V8 & Blink source code in order to implement taint-tracking for String class.
+This post discusses the internals the changes which were made into the V8 & Blink source code to implement taint-tracking for `String` class.
 
-We shall first discuss an overall picture of what we want to be able to do and how it fits in to the major sub-components of V8 & blink. Next, we will bisect the changes in depth in order to understand them better.
+We shall first discuss an overall picture of what we want to be able to do and how it fits into the major sub-components of V8 & blink. Next, we will bisect the changes in-depth to understand them better.
 
 ## Overall Picture
 
-**TODO**: Add the initial diagram and picture once you have the understanding of the major pieces and keep updating them as you move forward. 
+**TODO**: Add the initial diagram and picture once you have an understanding of the major pieces and keep updating them as you move forward. 
 
 ## V8 Diff breakdown
 
-Now let's first take a look at the changes which have been made in the V8 Javscript engine source code.
+Now let's first take a look at the changes which have been made in the V8 Javascript engine source code.
 
 #### 1. Build
 
@@ -44,22 +44,22 @@ Include the capnp binaries in your path:
 export PATH="$PATH:/path-to/capnproto-install/bin"
 ```
 
-Which can be found in the `TAINT_TRACKING_README`. You might wanna learn how to effectiely use gn, [this](https://www.chromium.org/developers/gn-build-configuration) might help.
+Which can be found in the `TAINT_TRACKING_README`. You might wanna learn how to effectively use `gn`, [this](https://www.chromium.org/developers/gn-build-configuration) might help.
 
 #### 2. Adding a new internal V8 class
 ```
  include/v8-internal.h                              |    4 +-
  include/v8.h                                       |  196 +-
 ```
-These files make changes to the soul `objects/string.h` import into `v8.h` so that the exported `String` class can support taint data propogation.
+These files make changes to the soul `objects/string.h` import into `v8.h` so that the exported `String` class can support taint data propagation.
 
-This requires notable functions, classes and interfaces which appear throughout the codebase.
+This requires notable functions, classes, and interfaces that appear throughout the codebase.
 - Namespace: `tainttracking`
 - dataType **TaintData**:
     - enum `TaintType`
         - This enum store the kind of Taint and the source of taint in a bit encoded form
     - enum `TaintSinkLabel`
-        - The Label for the end distination for the tainted string data
+        - The Label for the end destination for the tainted string data
 - Functions (Most of them are defined in `src/api.cc`):
     - `WriteTaint()`
     - `GetTaintInfo()`
@@ -72,7 +72,7 @@ This requires notable functions, classes and interfaces which appear throughout 
     - `TaintTrackingBase`
         - Implements an virtual class which defines two purely virtual functions `GetTaintChars()` & `InitTaintChars()`. These are to be imeplemented by the derived class in order to keep track & update taint.
     - `TaintTrackingStringBufferImpl`
-        - This class extends `TaintTrackingBase` and implements the Two purley virutal functions defined by `TaintTrackingBase`.
+        - This class extends `TaintTrackingBase` and implements the Two Purley virtual functions defined by `TaintTrackingBase`.
         - It makes use of a new private data member  `private: mutable std::unique_ptr<TaintData> taint_data_;`
     - Extending `V8_EXPORT String : public Name` with a TaintVisitor class which we will see is defined in `/src/taint_tracking/taint_tracking.cc` later.
 
@@ -122,7 +122,7 @@ index dd81ef81e3..9a685e2ee6 100644
 +
 +  // A taint type stores a single byte of taint information about a single
 +  // character of string data. The most significant three bits are used for the
-+  // encoding and the last significant 5 bits are used for the taint type.
++  // encoding and the least significant 5 bits are used for the taint type.
 +  //
 +  // 0 0 0      0 0 0 0 0
 +  // \___/      \_______/
@@ -329,13 +329,13 @@ index dd81ef81e3..9a685e2ee6 100644
     * and run is compiled and run in this context.  If another context
 ```
 
-#### 3. Additing Embedding API for taint
+#### 3. Editing Embedding API for taint
 ```
  src/api.cc                                         |  120 +-
 ```
-The `src/api.cc` defines functions which are normally called from the process which embeds the V8 Isolate. Normally, the Embedder only has access to `V8.h` and `api.cc` primitives.
+The `src/api.cc` defines functions that are normally called from the process which embeds the V8 Isolate. Normally, the Embedder only has access to `V8.h` and `api.cc` primitives.
 
-Tweaks below allow the chromium backened to interface with the V8 backened in order to execute the javascript context. 
+Tweaks below allow the chromium backend to interface with the V8 backend to execute the javascript context. 
 
 ```diff
 diff --git a/src/api.cc b/src/api.cc
@@ -364,7 +364,7 @@ index 634ad37115..27346704d6 100644
  }
 ```
 
-Here, WriteTaint is defined which allows the embedder to write new taint data to the V8 string object. Each cracter has it's only taint data.
+Here, WriteTaint is defined which allows the embedder to write new taint data to the V8 string object. Each character has it's only tainted data.
 This function digs out the handler to the string and then calls out taint-tracking logic in ` src/taint_tracking.h` to mark the taints appropriately.
 ```diff
 +void String::WriteTaint(uint8_t* buffer,
@@ -505,12 +505,13 @@ Similarly, most of the following definitions wrap the call to the actual logic i
 diff --git a/src/assembler.cc b/src/assembler.cc
 index 98182514aa..f820cf6a75 100644
 ```
-#### 4. Mobifying the Internal assembler
+#### 4. Modifying the Internal assembler
+Once have the builtins in place to handle the taint propagation calls, it might be helpful to create some debug points in the assembler. This is a nice trick to dump debug information on builtin triggers. More so because in the assembler's scope, you are able to access some more internal information like `internal_buffer` and `static` states.
 ```
  src/assembler.cc                                   |    5 +
  src/assembler.h                                    |   11 +-
 ```
-The `/src/assembler.cc` file defines the aseemblers usually used by CSA for code generation.
+The `/src/assembler.cc` file defines the assemblers usually used by CSA for code generation.
 ```diff
 diff --git a/src/assembler.cc b/src/assembler.cc
 index 98182514aa..f820cf6a75 100644
@@ -528,11 +529,6 @@ index 98182514aa..f820cf6a75 100644
  }
  
  AssemblerBase::~AssemblerBase() {
-```
-Here it looks like a counter of somesort was added with an easy to identify initialized value.
-
-**TODO:** Ask @stroucki about the significance
-```diff
 diff --git a/src/assembler.h b/src/assembler.h
 index a870c0b638..0987c508f3 100644
 --- a/src/assembler.h
@@ -571,7 +567,7 @@ index a870c0b638..0987c508f3 100644
      if (FLAG_enable_embedded_constant_pool) {
 ```
 
-#### 5. Adding builtins
+#### 5. Adding builtins (CSA, use the new functions...)
 
 ```
  src/bootstrapper.cc                                |   18 +
@@ -580,11 +576,11 @@ index a870c0b638..0987c508f3 100644
  src/builtins/builtins-definitions.h                |   11 +-
  src/builtins/builtins-function.cc                  |   10 +
 ```
-The builtins are the heart and soul of the changes from a javascript file's prespective. There are two ways for taint to get generated/propogated:
+The builtins are the heart and soul of the changes from a javascript file's perspective. There are two ways for taint to get generated/propagated:
 - due to builtins getting called from the embedded V8 calls
     - Usually done for blink based javascript DOM calls
-- due to plain javscript interactions
-    - happens due to javscript calls inside V8
+- due to plain javascript interactions
+    - happens due to javascript calls inside V8
 
 the builtins are triggered for all the javascript code compilation. The builtins define the operation on internal objects based on the ECMAScript specification.
 
@@ -630,11 +626,11 @@ index e970f5d2f3..e30ecd5860 100644
 diff --git a/src/builtins/builtins-api.cc b/src/builtins/builtins-api.cc
 index e1c76c0fd9..1fc4663902 100644
 ```
-The `bootstrapper.cc` is the file which at build time generates the interpreter code for all the builtins as described [here](https://v8.dev/blog/embedded-builtins). You may install a buitin as a function, getter, setter etc.
+The `bootstrapper.cc` is the file that at build time generates the interpreter code for all the builtins as described [here](https://v8.dev/blog/embedded-builtins). You may install a builtin function, getter, setter, etc.
 
-In the above snippet, we are installing multiple builtins which would allow us to get and set taint data. These probably will be defined in the `/builtins/builtins-string*` files which we will discuss about in `section 5(i)`.
+In the above snippet, we are installing multiple builtins that would allow us to get and set taint data. These probably will be defined in the `/builtins/builtins-string*` files which we will discuss in `section 5(i)`.
 
-Lastly, we said above that these are functions which we can call. It's fair to assume that not normal script would be calling it itself. Rather, these allow us to see the operations. Thus, we still have a missing link on how exactly does the taint get transferred during the interaction between the strings. You would agree that in order to do it, we would have to change primitve string operations like creation, append etc. These are looked at mainly in the `builtins-x64.cc` since these operation are implemented in platform dependent way, with the goal of making them snappy.
+Lastly, we said above that these are functions which we can call. It's fair to assume that not a normal script would be calling it itself. Rather, these allow us to see the operations. Thus, we still have a missing link on how exactly does the taint get transferred during the interaction between the strings. You would agree that to do it, we would have to change primitive string operations like creation, append, etc. These are looked at mainly in the `builtins-x64.cc` since these operations are implemented in a platform-dependent way, to make them snappy.
 
 ```diff
 diff --git a/src/builtins/builtins-api.cc b/src/builtins/builtins-api.cc
@@ -701,7 +697,7 @@ index e1c76c0fd9..1fc4663902 100644
 +
 +  tainttracking::RuntimeExitSymbolicStackFrame(isolate);
 +
-   // Check for exceptions and return result.
+   // Check for exceptions and return a result.
    RETURN_FAILURE_IF_SCHEDULED_EXCEPTION(isolate);
    return result;
 diff --git a/src/builtins/builtins-constructor-gen.cc b/src/builtins/builtins-constructor-gen.cc
@@ -780,11 +776,14 @@ index cd68b261cc..6259bf8d8f 100644
      builder.AppendCString("\n})");
 ```
 
+Many of these calls are also just wrappers to trigger the main taint tracking logic.
+
 ##### 5(i): Global Builtins
 ```
  src/builtins/builtins-global.cc                    |   36 +
 ```
-..........................
+Builtins like everything have scopes. Earlier we defined new builtins for the string class and even told our CSA to include them in the next builin. But wait a minute, where are these global wrappers defined? Right here in the `builtins-global.cc`, these wrappers allow us to directly send the control flow over to our taint tracking logic.
+> NOTE: you have to keep in mind that this is still CSA. While you are indeed calling an arbitrary C++ function, you have to account for the control-flow and return types in the CSA manner.
 ```diff
 diff --git a/src/builtins/builtins-global.cc b/src/builtins/builtins-global.cc
 index 83820de135..c6c9c35b54 100644
@@ -852,9 +851,12 @@ index 83820de135..c6c9c35b54 100644
 ```
  src/builtins/builtins-string-gen.cc                |   33 +-
  src/builtins/builtins-string.cc                    |   64 +
- src/builtins/builtins.h                            |    3 +-
- src/builtins/x64/builtins-x64.cc                   |  227 +-
 ```
+Finally, have the locations where we are actually making the changes to the String-based builtins. This makes a lot of sense if you think about it. We already defined the global helper builtins which we can now call to do all the heavy lifting for us. At this point, It's time to get our hands dirty and tweak the builtins.
+
+There are two main kind of operations:
+- **Type 1**:`Taint Inits`: Places where a new string object is getting created, hence we need to create a new object to track the taint for that object.
+- **Type 2**:` Propagating Taints`: Places where taint is getting propagated from one node to another. This could be parts of trying to contaminate other parts of the string and so on.
 
 ```diff
 diff --git a/src/builtins/builtins-string-gen.cc b/src/builtins/builtins-string-gen.cc
@@ -875,6 +877,10 @@ index 085ffcfafa..25205049c5 100644
      Node* one_byte_result = AllocateSeqOneByteString(context, Unsigned(argc));
  
      TVARIABLE(IntPtrT, var_max_index);
+```
+In the `StringFromCharCode` builtin, we are creating a new string object from a char code, hence it's of Type 1. However, this requires multiple changes. Including initializing the taint object and some setup, which you can see in the code below.
+> Note: The same function is continuted in the code below. The `@@ -XXX,X XX,XX @@ Func()` whould help.
+```diff
 @@ -637,7 +640,7 @@ TF_BUILTIN(StringFromCharCode, CodeStubAssembler) {
      // in 8 bits.
      CodeStubAssembler::VariableList vars({&var_max_index}, zone());
@@ -950,6 +956,9 @@ index 085ffcfafa..25205049c5 100644
            var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
          },
          var_max_index.value());
+```
+The `ConvertCaseHelper` doesn't seem as interesting.
+```diff
 diff --git a/src/builtins/builtins-string.cc b/src/builtins/builtins-string.cc
 index d656c8769c..0b98a2ecb1 100644
 --- a/src/builtins/builtins-string.cc
@@ -971,6 +980,11 @@ index d656c8769c..0b98a2ecb1 100644
      // If not ASCII, we discard the result and take the 2 byte path.
      if (index_to_first_unprocessed == length)
        return has_changed_character ? *result : *s;
+```
+Things get very interesting here. We see various new definitions below. If you take a quick look, these are the new builtins which we added to our [build process](#Adding_Adding_builtins_(CSA,_use_the_new_functions...)). Woah! This makes sense!
+
+Okay, back to a function. Here, we can actually see how all these wrappers exactly function. As you see, these wrappers allow us to write the functions in C++/x64 and directly trigger them as builtins, which is pretty convenient. There isn't a whole bunch to discuss here other than saying what's already there verbatim, hence I will not be getting into that here.
+```diff
 @@ -592,5 +595,66 @@ BUILTIN(StringRaw) {
    RETURN_RESULT_OR_FAILURE(isolate, result_builder.Finish());
  }
@@ -1044,6 +1058,13 @@ index d656c8769c..0b98a2ecb1 100644
  src/builtins/builtins.h                            |    3 +-
  src/builtins/x64/builtins-x64.cc                   |  227 +-
 ```
+
+We discussed in the basic CSA and Turbofan article the reasons why CSA exists. In a few words, *It exists to that we don't have to write platform-dependent code for each bulletin to get the best performance*.
+
+However, It is not like `x64` is never useful. If you think about it, the taint-tracking functions are called from all over the place. On top of that, they're pretty computed and resource-intensive. Thus, it might make sense to write them in assembly to get the best performance and efficiency. While most of the heavy lifting is done by the code we wrapped, there are native `x64` builtins that `String`, which also need some wrapping.
+
+The really awesome part is that here, you're aiming to call C++ functions from the handwritten assembly. Hence you'll have to save a lot of contexts manually. Let's take a look at the things we changed:
+
 ```diff
 diff --git a/src/builtins/builtins.h b/src/builtins/builtins.h
 index 7ea440e004..8fbdad3a27 100644
@@ -1116,6 +1137,9 @@ index 0f0ca80311..2e5ba21887 100644
 +
 +  #endif
 +}
+```
+Above we wrapped the basic `_mov` instruction to preserve any taint information that might already exist.
+```diff
 +
 +#ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
 +inline void GeneratePushArgumentLoop(MacroAssembler* masm, Register scratch) {
@@ -1147,6 +1171,9 @@ index 0f0ca80311..2e5ba21887 100644
 +}
 +#endif
 +
+```
+Here we are creating few function call primitives which we can use in other `x64` builtins in order to trigger the C++ code.
+```diff
 +inline void GenerateTaintTrackingPrepareCall(
 +    MacroAssembler* masm, tainttracking::FrameType caller_frame_type) {
 +  #ifdef V8_TAINT_TRACKING_INCLUDE_CONCOLIC
@@ -1277,13 +1304,16 @@ index 0f0ca80311..2e5ba21887 100644
  void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
    // ----------- S t a t e -------------
    //  -- rax: number of arguments
+```
+Now that we have all the helper functions, we include calls to our taint tracking code directly from the handwritten assembly. Everything works as expected since we register and setup is done by the builtins above. Cool!
+```diff
 @@ -95,6 +295,8 @@ void Generate_JSBuiltinsConstructStubHelper(MacroAssembler* masm) {
      // The receiver for the builtin/api call.
      __ PushRoot(RootIndex::kTheHoleValue);
  
 +    GenerateTaintTrackingSetReceiver(masm);
 +
-     // Set up pointer to last argument.
+     // Set up pointer to the last argument.
      __ leap(rbx, Operand(rbp, StandardFrameConstants::kCallerSPOffset));
  
 @@ -650,6 +852,13 @@ static void Generate_JSEntryTrampolineHelper(MacroAssembler* masm,
@@ -1338,7 +1368,7 @@ index 0f0ca80311..2e5ba21887 100644
 +  GenerateTaintTrackingPrepareApply(
 +      masm, tainttracking::FrameType::BUILTIN_REFLECT_APPLY);
 +
-   // 3. Apply the target to the given argumentsList.
+   // 3. Apply the target to the given arguments list.
    __ Jump(BUILTIN_CODE(masm->isolate(), CallWithArrayLike),
            RelocInfo::CODE_TARGET);
 @@ -1837,6 +2055,9 @@ void Builtins::Generate_ReflectConstruct(MacroAssembler* masm) {
@@ -1373,7 +1403,10 @@ index 0f0ca80311..2e5ba21887 100644
  src/contexts.cc                                    |   15 +-
  src/contexts.h                                     |    5 +-
 ```
+Finally, we reach the point where we have to tweak the CSA engine itself so that our taint-tracking code can be incorporated. 
 
+> Note: While this is a very integral part, I didn't have enough time in my study to explain this very well. Hence I will be leaving this out for the current scope of explanation. TODO.
+> 
 ```diff
 diff --git a/src/code-stub-assembler.cc b/src/code-stub-assembler.cc
 index 8411a7c5da..4980eda073 100644
@@ -1886,15 +1919,3 @@ index 8411a7c5da..4980eda073 100644
      Goto(&return_result);
    }
 ```
-
-
-
-
--------------------
-
-Things to ask Michael:
-- How does the IPC between the blink and V8 work
-    - especially from the protobuf derivative that was added
-- How does the controlflow work
-    - from: the functions defined in the `api.cc`
-    - to: functions defined in `src/taint_tracking/...`
