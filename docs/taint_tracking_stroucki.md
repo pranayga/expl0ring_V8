@@ -8,10 +8,6 @@ This post discusses the internals the changes which were made into the V8 & Blin
 
 We shall first discuss an overall picture of what we want to be able to do and how it fits into the major sub-components of V8 & blink. Next, we will bisect the changes in-depth to understand them better.
 
-## Overall Picture
-
-**TODO**: Add the initial diagram and picture once you have an understanding of the major pieces and keep updating them as you move forward. 
-
 ## V8 Diff breakdown
 
 Now let's first take a look at the changes which have been made in the V8 Javascript engine source code.
