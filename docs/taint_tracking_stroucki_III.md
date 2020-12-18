@@ -4,22 +4,20 @@
 Commit SHA: 600241ea64
 
 ## Chrome Diff breakdown
-Let's start taking a look ny breaking down the changes in the Chrome source code into major chunks. While ther are a lot of gluecode in smaller files, we'll track our way from the bigger changes to the smaller ones.
+Let's start taking a look by breaking down the changes in the Chrome source code into major chunks. While there is a lot of glue code in smaller files, we'll track our way from the bigger changes to the smaller ones.
 Blink [basics](https://docs.google.com/document/d/1aitSOucL0VHZa9Z2vbRJSyAIsAz24kX8LFByQ5xQnUg/edit#heading=h.v5plba74lfde).
 
 #### 1. Basic Setup
 ```
 chrome/BUILD.gn                                    |   5 +
 ```
-Linking information on the `capnp_lib` has been added in the build process. This is used for taint data commiunication between the V8 engine and blink's backend as far as I can currently understand. 
-
-**TODO**: Probably a good idea to get @michael's view on it.
+Linking information on the `capnp_lib` has been added in the build process. This is used for taint data communication between the V8 engine and blink's backend as far as I can currently understand. 
 
 ```
  base/debug/stack_trace_posix.cc                    |   1 +
  base/logging.cc                                    |   1 
 ```
-Some minor changes related to logging and not letting the program crash on debug.
+Some minor changes related to logging and not letting the program crash on debugging.
 
 #### 2. Importing in the new V8_taint_class into blink
 ```
@@ -27,7 +25,7 @@ Some minor changes related to logging and not letting the program crash on debug
  net/proxy_resolution/proxy_resolver_v8.cc          |   6 +-
 
 ```
-This change seems to implement `multiple inheritence` on the `StaticV8ExternalOneByteStringResource` which was initially derived from the internal structure in the V8's `public v8::String::ExternalOneByteStringResource` and `public v8::String::TaintTrackingStringBufferImpl` was added to the mix.
+This change seems to implement `multiple inheritances` on the `StaticV8ExternalOneByteStringResource` which was initially derived from the internal structure in the V8's `public v8::String::ExternalOneByteStringResource` and `public v8::String::TaintTrackingStringBufferImpl` was added to the mix.
 
 ```diff
 diff --git a/extensions/renderer/static_v8_external_one_byte_string_resource.h b/extensions/renderer/static_v8_external_one_byte_string_resource.h
@@ -68,19 +66,18 @@ index 3f569585a7b7..0b69ea4cb7fb 100644
    // throughout this object's lifetime.
 ```
 ----
-Proxy Resolver seems to have very similar changes. Wherever we have a class being derived from `v8::String::ExternalOneByteStringResource`, we replace it with a multiple inheritence configuration. Probably to add our taint keeping structures.
-
-
-**TODO**: Reorder this once you understand the significance and inner working of this class.
+Proxy Resolver seems to have very similar changes. Wherever we have a class being derived from `v8::String::ExternalOneByteStringResource`, we replace it with a multiple inheritance configuration. Probably to add our taint keeping structures.
 
 #### 3. V8 - Message event
 
 ```
  .../core/v8/custom/v8_message_event_custom.cc      |  32 +++
 ```
-This significant change seem to add some modifications to the V8MessageEvent in order to continue the taint propogation. Some major blink control flow is documented in [basics of blink](https://docs.google.com/document/d/1aitSOucL0VHZa9Z2vbRJSyAIsAz24kX8LFByQ5xQnUg/edit#heading=h.v5plba74lfde).
+This significant change seems to add some modifications to the V8MessageEvent to continue the taint propagation. Some major blink control flow is documented in [basics of blink](https://docs.google.com/document/d/1aitSOucL0VHZa9Z2vbRJSyAIsAz24kX8LFByQ5xQnUg/edit#heading=h.v5plba74lfde).
 
-**TODO**: However, I am still quite unsure on how exactly the message pasing the the V8 embedding work. I am going to contact Michael for some pointers and come back after looking into V8 some more.
+This piece of code helps is explicitly propagate taint as required. In Blink, it's often called to make sure that the taint propagation takes place for objects started between the Blink V8 space.
+
+**TODO**: However, I am still quite unsure of how exactly the message passing the V8 embedding work. I am going to contact Michael for some pointers and come back after looking into V8 some more. However, This is more of chromium and V8 cross-compatibility at this point, hence a little `out of scope`.
 
 ```diff
 diff --git a/third_party/blink/renderer/bindings/core/v8/custom/v8_message_event_custom.cc b/third_party/blink/renderer/bindings/core/v8/custom/v8_message_event_custom.cc
@@ -131,6 +128,12 @@ index 864991f2a2f2..184a9fbb39cb 100644
 ```
  .../bindings/core/v8/local_window_proxy.cc         |  22 ++
 ```
+The `local window proxy` seems to be a way to link the window object for the rendered webpage with the V8 backend. This object would have members like URLs and the `GET` parameters which is what makes it interesting. 
+
+In the code below, 
+1. On each ContextCreate() we update the TrackingId so that we can update it in the V8's tracking system. This also enables us to track multiple taints for different windows running in different Isolates.
+2. The definition of the `UpdateTaintTrackingContextId` here. In a nutshell, we get the frame and then use the V8's hook to update the information in the linked V8 Isolate's Context.
+
 ```diff
 diff --git a/third_party/blink/renderer/bindings/core/v8/local_window_proxy.cc b/third_party/blink/renderer/bindings/core/v8/local_window_proxy.cc
 index 9c3e848f01ae..0cc09f097ef7 100644
@@ -188,63 +191,48 @@ index 9c3e848f01ae..0cc09f097ef7 100644
                                     scoped_refptr<DOMWrapperWorld> world)
 ```
 
-#### 5 - ... Pending Stuff
+#### 5 An Over View Changes in Blink & Rendering family
 
+Interfacing between the V8 engine and Chromium is no easy task. This is even bigger of a fact because there are a lot of key ideas to notice before such functionality can cohesively function.
+
+While looking at all the blink related changes kind of go out of scope, here's a brief look at the major components which were changed and how those changes fit in:
+
+- `third_party/blink/renderer/core/dom/*`: These changes mainly seem to add invocations to the taint-tracking code to propagate & Set taint data through these C++ functions which make use of the V8 String classes.
+- `blink/renderer/core/HTML/parser/*`: Contains the actual HTML parser that the browser uses to generate the Tree structure from the provided HTML. A lot of changes here seem to augment existing helper functions with calls to taint tracking API + Create some storage space to store the taint data.
+- `/renderer/platform/bindings/*`: This is a very interesting piece. If you take a look at the main header file:
+```C++
+// ScriptState is an abstraction class that holds all information about script
+// execution (e.g., v8::Isolate, v8::Context, DOMWrapperWorld, ExecutionContext
+// etc). If you need any info about the script execution, you're expected to
+// pass around ScriptState in the code base. ScriptState is in a 1:1
+// relationship with v8::Context.
 ```
- .../renderer/bindings/core/v8/local_window_proxy.h |   2 +
- .../renderer/bindings/core/v8/script_controller.cc |   4 +
- .../renderer/bindings/core/v8/script_controller.h  |   1 +
- .../renderer/bindings/core/v8/v8_code_cache.cc     |   1 +
+
+This is where a lot of wrappers that blink uses are defined. These wrappers basically forward the incoming requests regarding taint tracking is to figure out how to handle them by looking at the V8 context state.
+- `/renderer/platform/wtf/text/*`: The WTF framework provides a wrapper over the basic container classes to the blink and other Chromium components. These hooks mainly allow us to call our own initializer with any basic string initializers that are called throughout the codebase.
+```
  third_party/blink/renderer/core/dom/document.cc    |  32 ++-
  third_party/blink/renderer/core/dom/element.cc     |  14 ++
- .../blink/renderer/core/dom/events/event_target.cc |   6 +
- .../blink/renderer/core/dom/events/event_target.h  |   3 +
- .../renderer/core/dom/events/event_target.idl      |   2 +
  third_party/blink/renderer/core/dom/node.cc        |  15 ++
  third_party/blink/renderer/core/dom/node.h         |   2 +
  .../blink/renderer/core/events/message_event.cc    |  11 +
- .../blink/renderer/core/events/message_event.h     |   9 +
- .../blink/renderer/core/events/message_event.idl   |   2 +-
- .../blink/renderer/core/frame/local_frame.h        |   1 +
  third_party/blink/renderer/core/frame/location.cc  |  60 +++++-
  .../core/frame/window_or_worker_global_scope.cc    |  14 ++
- .../renderer/core/html/html_anchor_element.cc      |   4 +
- .../blink/renderer/core/html/html_embed_element.cc |   4 +
- .../renderer/core/html/html_iframe_element.cc      |   1 +
- .../blink/renderer/core/html/html_image_element.cc |   2 +
- .../renderer/core/html/html_script_element.cc      |   7 +
- .../renderer/core/html/parser/atomic_html_token.h  |   1 +
- .../core/html/parser/atomic_html_token_test.cc     |   8 +-
- .../core/html/parser/compact_html_token_test.cc    |   4 +-
  .../core/html/parser/html_entity_parser.cc         |  73 ++++---
  .../renderer/core/html/parser/html_entity_parser.h |  15 +-
  .../blink/renderer/core/html/parser/html_token.h   |  57 +++--
  .../renderer/core/html/parser/html_tokenizer.cc    | 229 ++++++++++++---------
- .../renderer/core/html/parser/html_tokenizer.h     |   6 +-
- .../core/html/parser/input_stream_preprocessor.h   |  11 +
- .../core/html/parser/markup_tokenizer_inlines.h    |   3 +
- .../blink/renderer/core/html/parser/xss_auditor.cc |   2 +-
- third_party/blink/renderer/core/page/frame_tree.cc |   2 +
- .../service_worker/thread_safe_script_container.cc |   4 +-
- .../blink/renderer/modules/storage/storage_area.cc |  11 +-
  .../renderer/platform/bindings/script_state.cc     |  43 ++++
- .../renderer/platform/bindings/script_state.h      |   5 +
  .../renderer/platform/bindings/string_resource.cc  |  33 ++-
  .../renderer/platform/bindings/string_resource.h   |  25 ++-
- .../platform/loader/fetch/cached_metadata.cc       |   2 +
- .../platform/loader/fetch/resource_loader.cc       |   1 +
- .../renderer/platform/text/segmented_string.cc     |   8 +-
  .../renderer/platform/text/segmented_string.h      |  20 +-
- third_party/blink/renderer/platform/wtf/BUILD.gn   |   2 +
- .../renderer/platform/wtf/text/string_impl.cc      |  13 +-
- .../blink/renderer/platform/wtf/text/string_impl.h |   6 +-
  .../renderer/platform/wtf/text/taint_tracking.cc   |  86 ++++++++
  .../renderer/platform/wtf/text/taint_tracking.h    | 100 +++++++++
- tools/v8_context_snapshot/BUILD.gn                 |   7 +
  url/gurl.cc                                        |  11 +
- url/url_canon_etc.cc                               |   1 +
- url/url_canon_internal.cc                          |   3 +
+ ........
  66 files changed, 887 insertions(+), 190 deletions(-)
  create mode 100644 third_party/blink/renderer/platform/wtf/text/taint_tracking.cc
  create mode 100644 third_party/blink/renderer/platform/wtf/text/taint_tracking.h
 ```
+
+That's all we will we covering for the time being! Plan to update this post in the future with more in-depth details on the code once we understand them better!
