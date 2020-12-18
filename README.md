@@ -116,6 +116,9 @@ In the [V8 Exploitation Primitives](/docs/JavaScript%20Engine%20Exploitation%20P
 article, we shift gears and talk about the exploitation primitives which have existed in the V8 engine subspace. Here we discuss the primitives that we want to gain through a bug, allowing us to gain different kinds
 of privileges. This is done through the exploration of various examples.
 
+## Squashing Bugs
+This article covers security mechanisms that V8 has already implemented. It also delves into helpful topics like the Chromium Bug Tracker, the Changelog, and ongoing security projects at Google.
+
 ## Taint - Tracking in V8
 Browsers touch data originating from a lot of sources. Often webpages have differentiating and unusual 
 characteristics when it comes to how user data touches various components of a webpage. This can be effectively 
