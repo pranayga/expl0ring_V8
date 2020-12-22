@@ -117,7 +117,7 @@ article, we shift gears and talk about the exploitation primitives which have ex
 of privileges. This is done through the exploration of various examples.
 
 ## Squashing Bugs
-This article covers security mechanisms that V8 has already implemented. It also delves into helpful topics like the Chromium Bug Tracker, the Changelog, and ongoing security projects at Google.
+[This article](https://github.com/pranayga/expl0ring_V8/blob/master/docs/Squashing%20Bugs.md) covers security mechanisms that V8 has already implemented. It also delves into helpful topics like the Chromium Bug Tracker, the Changelog, and ongoing security projects at Google.
 
 ## Taint - Tracking in V8
 Browsers touch data originating from a lot of sources. Often webpages have differentiating and unusual 
