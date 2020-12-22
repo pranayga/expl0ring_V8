@@ -134,18 +134,25 @@ Thus in the following posts, we shall look into the efforts which were made and 
 [source code](https://cement.andrew.cmu.edu/stroucki/chromium-taint-tracking) modification which allows 
 taint tracking, with a special emphasis on V8-based modifications.
 
-### Tweaking / Adding a new Object type to V8 - (In works)
+### Tweaking / Adding a new Object type to V8
 Before we start propagating any kind of taint data, we need to figure out how to store that taint data. Taint data can be maintained at different granularity levels.  In the article [taints in V8](docs/tweaking_v8_objects.md), we explore one possible way of modifying the base String class to incorporate taint data.
 
-### Propagating Taints in V8  - (In works) 
+![Taint Tracking Overview](https://i.imgur.com/hi3dmeO.png)
+
+The base ideas explored here is to augment the `String` class to incorporate a byte to taint data per byte of string data. This helps us propagate the taint at a very fine grain level. We also have to change a few things around in the `Factory`, to properly generate these objects.
+
+### Propagating Taints in V8
 Once we have the idea of a changed String class, the next step would be to accommodate the actual taint propagation inside V8 during the interaction between different string objects. In the post [taint_tracking_stroucki](docs/taint_tracking_stroucki.md), we explore how taints initially get introduced from blink and then look at the builtins which are responsible for propagating the taint as different objects interact.
 
-Once we have some idea of the locations where taint is propagated, next would be to look at how exactly taint propagation functions. This is where `taint_tacking` library which was custom built for the very task comes in. the post [taint_tracking_stroucki_II](docs/taint_tracking_stroucki_II.md), discusses the codebase which is actually responsible for the taint management. This is the library that is triggered by the builtins, each time we need to propagate any taint data.
+Once we have some idea of the locations where taint is propagated, next would be to look at how exactly taint propagation functions. This is where the `taint_tacking` library which was custom built for the very task comes in. the post [taint_tracking_stroucki_II](docs/taint_tracking_stroucki_II.md), discusses the codebase which is actually responsible for the taint management. This is the library that is triggered by the builtins, each time we need to propagate any taint data.
 
-This is total completes a high-level overview of the code inside V8, which manages and propagates our taint data.
+This in a nutshell instructs V8 to actually call out `/taint_tracking` library during string operations at all the applicable places (which are quite a few in number).
 
-### Propogating Taint in Blink & though V8 - (In works) 
+### Propagating Taint in Blink & though V8
 Once we have a working taint propagation system in V8, the next point of attack would be to actually generate the initial points of taint and mark the sinks. In the post [taint_tracking_stroucki_III](docs/taint_tracking_stroucki_III.md), we discuss how we configure blink to mark the taint sources and sinks alongside enable taint propagation defined in the blink specific functions.
+
+This involves copying over out taint_tracking logic to chromium and integrating it with `Blink`'s V8 embedding to appropriately propagate taints for the operations happening on the blink side with V8's memory space. The communication is taken care of by the `Protobuf` and some sweet IPC. We also make changes to the `String` based functions inside Blink to identify taint sources and sinks.
+
 
 ## Exploiting a V8 N-Day
 We have 2 articles to explain a V8 bug from 2020; including how it was found, fully understanding it,
